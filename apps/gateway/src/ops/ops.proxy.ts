@@ -10,7 +10,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { Patterns } from '@nara/common';
+import { Patterns, type Pattern } from '@nara/common';
 import { ProxyService } from '../proxy/proxy.service';
 import { readToken, sendResult } from '../proxy/http';
 
@@ -22,7 +22,7 @@ export class OpsProxyController {
     req: Request,
     res: Response,
     which: 'ops',
-    pattern: string,
+    pattern: Pattern,
     extra: Record<string, unknown> = {},
   ) {
     const result = await this.proxy.send<Record<string, unknown>>(
