@@ -1,0 +1,32 @@
+export declare const Patterns: {
+    readonly AUTH_LOGIN: "auth.login";
+    readonly AUTH_LOGOUT: "auth.logout";
+    readonly AUTH_ME: "auth.me";
+    readonly AUTH_VERIFY: "auth.verify";
+    readonly PEOPLE_LIST: "people.list";
+    readonly PEOPLE_UPSERT: "people.upsert";
+    readonly PATIENTS_LIST: "patients.list";
+    readonly PATIENTS_ME: "patients.me";
+    readonly PATIENTS_MODULES: "patients.modules";
+    readonly ACCOUNTS_LIST: "ops.accounts.list";
+    readonly ACCOUNTS_ME: "ops.accounts.me";
+    readonly TERRITORIES_LIST: "ops.territories.list";
+    readonly EXPERTS_LIST: "ops.experts.list";
+    readonly WORKLISTS: "ops.worklists";
+    readonly FLAGS: "ops.flags";
+    readonly ASSETS: "ops.assets";
+    readonly ASSETS_BRACELETS: "ops.assets.bracelets";
+    readonly ASSETS_TABLET: "ops.assets.tablet";
+    readonly APP_STATE: "ops.appState";
+    readonly HEALTH_DB: "ops.health.db";
+    readonly TEO_ASK: "ai.teo.ask";
+    readonly TEO_CHAT: "ai.teo.chat";
+};
+export type Pattern = (typeof Patterns)[keyof typeof Patterns];
+export declare const ServicePorts: {
+    readonly auth: number;
+    readonly people: number;
+    readonly ops: number;
+    readonly ai: number;
+    readonly gateway: number;
+};

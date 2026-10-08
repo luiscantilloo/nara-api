@@ -1,0 +1,1 @@
+{"version":3,"file":"auth-core.module.js","sourceRoot":"","sources":["auth-core.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,iDAAgD;AAChD,uDAAmD;AAO5C,IAAM,cAAc,GAApB,MAAM,cAAc;CAAG,CAAA;AAAjB,wCAAc;yBAAd,cAAc;IAL1B,IAAA,eAAM,EAAC;QACN,OAAO,EAAE,CAAC,yBAAc,CAAC;QACzB,SAAS,EAAE,CAAC,gCAAc,CAAC;QAC3B,OAAO,EAAE,CAAC,gCAAc,CAAC;KAC1B,CAAC;GACW,cAAc,CAAG"}
