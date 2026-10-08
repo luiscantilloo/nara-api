@@ -45,6 +45,7 @@ export type SessionUser = {
     href: string;
     nk: string | null;
     patientId?: string;
+    /** @deprecated Observador ya no usa tipos. */
     orgType?: string;
     modules?: string[];
 };

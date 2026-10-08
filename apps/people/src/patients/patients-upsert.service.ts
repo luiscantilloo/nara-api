@@ -30,6 +30,16 @@ export class PatientsUpsertService {
     const modulesVisible = normalizeModuleIds(
       body.modulesVisible ?? modulesEnabled,
     ).filter((m) => modulesEnabled.includes(m));
+    const terr = String(body.terr || body.place || '').trim();
+    let expert = String(body.expert || '').trim();
+    const db = await this.mongo.db();
+    if (terr && !expert) {
+      const assigned = await db.collection('experts').findOne({
+        terr,
+        active: { $ne: false },
+      });
+      if (assigned?.name) expert = String(assigned.name);
+    }
     const doc = {
       id,
       name,
@@ -38,7 +48,7 @@ export class PatientsUpsertService {
         .toLowerCase(),
       age: Number(body.age) || 0,
       place: String(body.place || ''),
-      terr: String(body.terr || body.place || ''),
+      terr,
       departamento: String(body.departamento || ''),
       municipio: String(body.municipio || ''),
       profile:
@@ -52,7 +62,7 @@ export class PatientsUpsertService {
       estrato: String(body.estrato || ''),
       phq: Array.isArray(body.phq) ? body.phq : [],
       phqDates: Array.isArray(body.phqDates) ? body.phqDates : ['Hoy'],
-      expert: String(body.expert || ''),
+      expert,
       clin: body.clin || null,
       next: String(body.next || 'Primera llamada dentro de 7 días'),
       nextShort: String(body.nextShort || 'Primera llamada'),
@@ -71,7 +81,6 @@ export class PatientsUpsertService {
       accountId: body.accountId || null,
       updatedAt: now,
     };
-    const db = await this.mongo.db();
     await db
       .collection('patients')
       .updateOne(

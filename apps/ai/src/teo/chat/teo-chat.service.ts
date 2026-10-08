@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
-import { geminiComplete, isGeminiConfigured } from '@nara/ai';
+import { llmComplete, isLlmConfigured } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
 
@@ -56,14 +56,29 @@ export class TeoChatService {
       const profile = String(data.profile || patient?.profile || 'P01');
       const age = data.age ?? patient?.age ?? '—';
       const history = String(data.history || '').slice(-2000);
+      const patientSnap = patient
+        ? JSON.stringify({
+            id: patient.id,
+            name: patient.name,
+            age: patient.age,
+            place: patient.place,
+            profile: patient.profile,
+            status: patient.status,
+            modulesEnabled: patient.modulesEnabled,
+          })
+        : '(sin ficha en Mongo)';
 
-      if (!isGeminiConfigured()) {
+      if (!isLlmConfigured()) {
         return { ok: true, status: 200, fallback: true, text: '' };
       }
 
-      const prompt = `${TEO_VOICE}
+      const system = `${TEO_VOICE}
 
-Hablas con ${name}, ${age} años, de ${place}. Perfil ${profile}.
+También: si la persona pregunta algo fuera de NARA, su ruta, su ánimo o su acompañamiento, diga con amabilidad que solo puede ayudar con el programa NARA.
+Use la ficha del paciente de la base; no invente datos clínicos.`;
+
+      const prompt = `Hablas con ${name}, ${age} años, de ${place}. Perfil ${profile}.
+Ficha (Mongo): ${patientSnap}
 Puedes ofrecer la respiración 4-6, anotar un tema para la sesión o un recurso de Mi ruta.
 Si solo saluda (hola, buenas), responde el saludo y pregunta cómo se siente, sin decir «gracias por contármelo».
 
@@ -73,11 +88,12 @@ ${history || '(inicio de conversación)'}
 ${fname}: ${message}
 TEO:`;
 
-      const { text, model } = await geminiComplete(prompt, {
+      const { text, model, provider } = await llmComplete(prompt, {
+        system,
         temperature: 0.55,
         maxTokens: 400,
       });
-      return { ok: true, status: 200, text: text.trim(), model };
+      return { ok: true, status: 200, text: text.trim(), model, provider };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error en TEO';
       return {

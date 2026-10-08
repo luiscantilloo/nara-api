@@ -4,6 +4,8 @@ export const Patterns = {
   AUTH_LOGOUT: 'auth.logout',
   AUTH_ME: 'auth.me',
   AUTH_VERIFY: 'auth.verify',
+  AUTH_VERIFY_IDENTITY: 'auth.verifyIdentity',
+  AUTH_RESET_PASSWORD: 'auth.resetPassword',
 
   PEOPLE_LIST: 'people.list',
   PEOPLE_UPSERT: 'people.upsert',
@@ -20,6 +22,7 @@ export const Patterns = {
   TERRITORIES_UPSERT: 'ops.territories.upsert',
   EXPERTS_LIST: 'ops.experts.list',
   EXPERTS_UPSERT: 'ops.experts.upsert',
+  EXPERTS_SET_GOALS: 'ops.experts.setGoals',
   WORKLISTS_LIST: 'ops.worklists.list',
   WORKLISTS_UPSERT: 'ops.worklists.upsert',
   WORKLISTS_PATCH: 'ops.worklists.patch',

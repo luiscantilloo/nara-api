@@ -3,6 +3,8 @@ export declare const Patterns: {
     readonly AUTH_LOGOUT: "auth.logout";
     readonly AUTH_ME: "auth.me";
     readonly AUTH_VERIFY: "auth.verify";
+    readonly AUTH_VERIFY_IDENTITY: "auth.verifyIdentity";
+    readonly AUTH_RESET_PASSWORD: "auth.resetPassword";
     readonly PEOPLE_LIST: "people.list";
     readonly PEOPLE_UPSERT: "people.upsert";
     readonly PATIENTS_LIST: "patients.list";

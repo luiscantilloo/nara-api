@@ -18,4 +18,11 @@ export class ExpertsController {
   ) {
     return this.experts.upsert(d.token, d.body || {});
   }
+
+  @MessagePattern(Patterns.EXPERTS_SET_GOALS)
+  setGoals(
+    @Payload() d: { token: string | null; body: Record<string, unknown> },
+  ) {
+    return this.experts.setGoals(d.token, d.body || {});
+  }
 }

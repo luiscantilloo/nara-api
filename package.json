@@ -13,7 +13,7 @@
     "start:ops": "nest start ops --watch",
     "start:ai": "nest start ai --watch",
     "kill:ports": "node scripts/kill-ports.mjs",
-    "start:dev:all": "npm run kill:ports && concurrently -k -n gateway,auth,people,ops,ai -c blue,green,yellow,magenta,cyan \"npm:start:gateway\" \"npm:start:auth\" \"npm:start:people\" \"npm:start:ops\" \"npm:start:ai\"",
+    "start:dev:all": "npm run kill:ports && concurrently -n gateway,auth,people,ops,ai -c blue,green,yellow,magenta,cyan \"npm:start:gateway\" \"npm:start:auth\" \"npm:start:people\" \"npm:start:ops\" \"npm:start:ai\"",
     "start:prod:gateway": "node dist/apps/gateway/apps/gateway/src/main.js",
     "start:prod:auth": "node dist/apps/auth/apps/auth/src/main.js",
     "start:prod:people": "node dist/apps/people/apps/people/src/main.js",

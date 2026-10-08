@@ -15,7 +15,7 @@ export function publicPerson(doc: Record<string, unknown>) {
     weeks: doc.weeks || 13,
     expert: doc.expert || '',
     expertId: doc.expertId || null,
-    status: doc.status || 'Activa',
+    status: doc.status || 'Sin evaluación',
     clin: doc.clin || null,
     phone: doc.phone || '',
     email: doc.email || '',

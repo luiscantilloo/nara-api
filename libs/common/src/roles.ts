@@ -116,7 +116,7 @@ export type SessionUser = {
   href: string;
   nk: string | null;
   patientId?: string;
-  /** Solo Observador: Financiador | Investigación | Institución de salud */
+  /** @deprecated Observador ya no usa tipos; se ignora al guardar. */
   orgType?: string;
   modules?: string[];
 };

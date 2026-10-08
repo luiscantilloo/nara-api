@@ -148,6 +148,46 @@ export class AccountsService {
           ? 'Activo'
           : (existingById?.status as string) || 'Activo';
 
+    const rawTerr = String(body.terr || '').trim();
+    const singleTerr = rawTerr
+      .split(/\s*[,;/|]\s*|\s+y\s+/i)
+      .map((x) => x.trim())
+      .filter(Boolean)[0] || '';
+    if (roleId === 'experto') {
+      if (!singleTerr || /^todos$/i.test(singleTerr)) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'El experto de campo debe tener un único territorio asignado.',
+        };
+      }
+      if (!(await db.collection('territories').findOne({ name: singleTerr }))) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Ese territorio no existe en la base de datos.',
+        };
+      }
+      const other = await db.collection('experts').findOne({
+        terr: singleTerr,
+        active: { $ne: false },
+        accountId: { $ne: id },
+        id: { $ne: id },
+      });
+      if (other && other.accountId !== id) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'El territorio «' +
+            singleTerr +
+            '» ya tiene experto asignado (' +
+            String(other.name || other.id) +
+            '). Cada territorio solo puede tener uno.',
+        };
+      }
+    }
+
     const setDoc: Record<string, unknown> = {
       id,
       name,
@@ -155,16 +195,18 @@ export class AccountsService {
       contact,
       role,
       roleId,
-      terr: String(body.terr || '').trim() || 'Todos',
+      terr:
+        roleId === 'experto'
+          ? singleTerr
+          : singleTerr || 'Todos',
       org:
         role === 'Observador' ? String(body.org || '').trim() : 'Programa NARA',
       status,
       updatedAt: now,
     };
     if (role === 'Observador') {
-      setDoc.orgType = body.orgType || 'Financiador';
+      // Un solo rol Observador (sin tipos Financiador / Investigación / Institución).
       setDoc.modules = Array.isArray(body.modules) ? body.modules : [];
-      if (body.ethics) setDoc.ethics = body.ethics;
     }
     let patientModules = DEFAULT_PATIENT_MODULES.slice();
     if (role === 'Paciente') {
@@ -173,11 +215,15 @@ export class AccountsService {
     }
     if (password) setDoc.passwordHash = await hashPassword(password);
 
-    await col.updateOne(
-      { id },
-      { $set: setDoc, $setOnInsert: { createdAt: now, created: true } },
-      { upsert: true },
-    );
+    const update: Record<string, unknown> = {
+      $set: setDoc,
+      $setOnInsert: { createdAt: now, created: true },
+    };
+    if (role === 'Observador') {
+      update.$unset = { orgType: '', ethics: '' };
+    }
+
+    await col.updateOne({ id }, update, { upsert: true });
 
     if (roleId === 'paciente') {
       await this.syncPatient(
@@ -193,7 +239,18 @@ export class AccountsService {
       );
     }
     if (roleId === 'experto') {
-      await this.syncExpert(db, id, name, contact, setDoc.terr, status, now);
+      try {
+        await this.syncExpert(db, id, name, contact, setDoc.terr, status, now);
+      } catch (err) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            err instanceof Error
+              ? err.message
+              : 'No se pudo sincronizar el experto de campo.',
+        };
+      }
     }
 
     const saved = await col.findOne({ id });
@@ -282,9 +339,28 @@ export class AccountsService {
     status: string,
     now: Date,
   ) {
+    const terrName = String(terr || '').trim();
     const existingExpert =
       (await db.collection('experts').findOne({ accountId: id })) ||
       (await db.collection('experts').findOne({ name }));
+    if (terrName && status === 'Activo') {
+      const occupied = await db.collection('experts').findOne({
+        terr: terrName,
+        active: { $ne: false },
+        ...(existingExpert?.id
+          ? { id: { $ne: existingExpert.id } }
+          : { accountId: { $ne: id } }),
+      });
+      if (occupied) {
+        throw new Error(
+          'El territorio «' +
+            terrName +
+            '» ya tiene experto asignado (' +
+            String(occupied.name || occupied.id) +
+            ').',
+        );
+      }
+    }
     const expertKey = existingExpert ? { id: existingExpert.id } : { name };
     await db.collection('experts').updateOne(
       expertKey,
@@ -293,7 +369,7 @@ export class AccountsService {
           accountId: id,
           name,
           phone: contact,
-          terr,
+          terr: terrName,
           active: status === 'Activo',
           updatedAt: now,
         },

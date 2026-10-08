@@ -14,17 +14,28 @@ export class AiProxyController {
     @Res() res: Response,
     @Body() body: Record<string, unknown>,
   ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'ai',
-      Patterns.TEO_ASK,
-      {
-        token: readToken(req),
-        question: body.question || body.text || body.q,
-        text: body.text || body.question,
-        role: body.role,
-      },
-    );
-    return sendResult(res, result);
+    try {
+      const result = await this.proxy.send<Record<string, unknown>>(
+        'ai',
+        Patterns.TEO_ASK,
+        {
+          token: readToken(req),
+          question: body.question || body.text || body.q,
+          text: body.text || body.question,
+          role: body.role,
+        },
+      );
+      return sendResult(res, result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Servicio TEO no disponible';
+      return res.status(503).json({
+        ok: false,
+        error:
+          'TEO no pudo conectar con el servicio de IA. Reinicie nara-api (ai en :4004). ' +
+          message,
+      });
+    }
   }
 
   @Post('chat')
@@ -33,21 +44,32 @@ export class AiProxyController {
     @Res() res: Response,
     @Body() body: Record<string, unknown>,
   ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'ai',
-      Patterns.TEO_CHAT,
-      {
-        token: readToken(req),
-        message: body.message,
-        history: body.history,
-        patientName: body.patientName,
-        place: body.place,
-        profile: body.profile,
-        age: body.age,
-        messages: body.messages,
-        system: body.system,
-      },
-    );
-    return sendResult(res, result);
+    try {
+      const result = await this.proxy.send<Record<string, unknown>>(
+        'ai',
+        Patterns.TEO_CHAT,
+        {
+          token: readToken(req),
+          message: body.message,
+          history: body.history,
+          patientName: body.patientName,
+          place: body.place,
+          profile: body.profile,
+          age: body.age,
+          messages: body.messages,
+          system: body.system,
+        },
+      );
+      return sendResult(res, result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Servicio TEO no disponible';
+      return res.status(503).json({
+        ok: false,
+        error:
+          'TEO no pudo conectar con el servicio de IA. Reinicie nara-api (ai en :4004). ' +
+          message,
+      });
+    }
   }
 }

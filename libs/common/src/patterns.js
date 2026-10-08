@@ -6,6 +6,8 @@ exports.Patterns = {
     AUTH_LOGOUT: 'auth.logout',
     AUTH_ME: 'auth.me',
     AUTH_VERIFY: 'auth.verify',
+    AUTH_VERIFY_IDENTITY: 'auth.verifyIdentity',
+    AUTH_RESET_PASSWORD: 'auth.resetPassword',
     PEOPLE_LIST: 'people.list',
     PEOPLE_UPSERT: 'people.upsert',
     PATIENTS_LIST: 'patients.list',

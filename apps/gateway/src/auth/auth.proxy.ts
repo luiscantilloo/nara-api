@@ -42,4 +42,40 @@ export class AuthProxyController {
     );
     return sendResult(res, result);
   }
+
+  @Post('verify-identity')
+  async verifyIdentity(
+    @Body()
+    body: { email?: string; firstName?: string; lastName?: string },
+    @Res() res: Response,
+  ) {
+    const result = await this.proxy.send<Record<string, unknown>>(
+      'auth',
+      Patterns.AUTH_VERIFY_IDENTITY,
+      {
+        email: body.email || '',
+        firstName: body.firstName || '',
+        lastName: body.lastName || '',
+      },
+    );
+    return sendResult(res, result);
+  }
+
+  @Post('reset-password')
+  async resetPassword(
+    @Body()
+    body: { email?: string; resetToken?: string; password?: string },
+    @Res() res: Response,
+  ) {
+    const result = await this.proxy.send<Record<string, unknown>>(
+      'auth',
+      Patterns.AUTH_RESET_PASSWORD,
+      {
+        email: body.email || '',
+        resetToken: body.resetToken || '',
+        password: body.password || '',
+      },
+    );
+    return sendResult(res, result);
+  }
 }

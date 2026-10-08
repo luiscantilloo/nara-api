@@ -66,7 +66,7 @@ export class PatientsModulesService {
               clin: person.clin || null,
               modulesEnabled,
               modulesVisible: modulesEnabled.slice(),
-              signal: person.status || 'Activa',
+              signal: person.status || 'Sin evaluación',
               ctx: person.ctx || { dano: 0, perdida: 0 },
               phq: [],
               timeline: [],

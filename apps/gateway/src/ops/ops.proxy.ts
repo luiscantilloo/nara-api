@@ -92,6 +92,15 @@ export class OpsProxyController {
     return this.send(req, res, 'ops', Patterns.EXPERTS_UPSERT, { body });
   }
 
+  @Post('experts/goals')
+  expertsGoals(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.send(req, res, 'ops', Patterns.EXPERTS_SET_GOALS, { body });
+  }
+
   @Get('worklists')
   worklists(
     @Req() req: Request,
