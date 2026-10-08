@@ -19,7 +19,8 @@
     "start:prod:people": "node dist/apps/people/apps/people/src/main.js",
     "start:prod:ops": "node dist/apps/ops/apps/ops/src/main.js",
     "start:prod:ai": "node dist/apps/ai/apps/ai/src/main.js",
-    "start:all": "npm run build && concurrently -n gateway,auth,people,ops,ai -c blue,green,yellow,magenta,cyan \"npm:start:prod:gateway\" \"npm:start:prod:auth\" \"npm:start:prod:people\" \"npm:start:prod:ops\" \"npm:start:prod:ai\"",
+    "start:prod:all": "concurrently -n gateway,auth,people,ops,ai -c blue,green,yellow,magenta,cyan \"npm:start:prod:gateway\" \"npm:start:prod:auth\" \"npm:start:prod:people\" \"npm:start:prod:ops\" \"npm:start:prod:ai\"",
+    "start:all": "npm run build && npm run start:prod:all",
 
     "lint": "eslint \"{apps,libs}/**/*.ts\" --fix",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\""
@@ -34,6 +35,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
+    "concurrently": "^9.1.2",
     "mongodb": "^7.7.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -50,7 +52,6 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
-    "concurrently": "^9.1.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
