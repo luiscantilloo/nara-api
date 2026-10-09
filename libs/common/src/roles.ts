@@ -67,13 +67,14 @@ export const PATIENT_MODULE_IDS = [
 
 export type PatientModuleId = (typeof PATIENT_MODULE_IDS)[number];
 
+/** Los 6 servicios de ruta, activos por defecto en la app del paciente. */
 export const DEFAULT_PATIENT_MODULES: PatientModuleId[] = [
   'mood',
+  'clin',
   'ia',
-  'cursos',
-  'videos',
   'tech',
-  'hist',
+  'revisit',
+  'cursos',
 ];
 
 const ALLOWED_MODULES = new Set<string>(PATIENT_MODULE_IDS);

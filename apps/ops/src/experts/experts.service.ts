@@ -198,15 +198,17 @@ export class ExpertsService {
     const auth = await requireRoles(this.sessions, token, ['admin']);
     if ('error' in auth) return auth.error;
 
-    const daily = Math.max(1, Math.min(50, Math.round(Number(body.daily) || 0)));
-    const weekly = Math.max(1, Math.min(200, Math.round(Number(body.weekly) || 0)));
-    if (!Number.isFinite(daily) || !Number.isFinite(weekly) || daily < 1 || weekly < 1) {
+    const dailyRaw = Number(body.daily);
+    const weeklyRaw = Number(body.weekly);
+    if (!Number.isFinite(dailyRaw) || !Number.isFinite(weeklyRaw) || dailyRaw < 1 || weeklyRaw < 1) {
       return {
         ok: false,
         status: 400,
-        error: 'Indique metas diarias y semanales válidas (números mayores que cero).',
+        error: 'Indique metas diarias y semanales válidas (mínimo 1).',
       };
     }
+    const daily = Math.min(50, Math.max(1, Math.round(dailyRaw)));
+    const weekly = Math.min(200, Math.max(1, Math.round(weeklyRaw)));
     if (weekly < daily) {
       return {
         ok: false,

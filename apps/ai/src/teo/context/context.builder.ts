@@ -18,7 +18,7 @@ export async function buildContext(
     return buildPatientContext(db, userId, question);
   }
   if (roleId === 'admin' || roleId === 'clinico' || roleId === 'experto') {
-    return buildStaffContext(db, roleId, question);
+    return buildStaffContext(db, roleId, question, userId);
   }
   return [APP_OVERVIEW, `Rol del usuario que pregunta: ${roleId}`].join('\n');
 }

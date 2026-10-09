@@ -57,6 +57,7 @@ export const APP_STATE_SLICES = [
   'referrals',
   'consents',
   'alerts',
+  'crisisLog',
   'closedToday',
   'revisits',
   'notifs',
@@ -97,4 +98,147 @@ export function pickAppStateSlices(source: Record<string, unknown>) {
     if (source[key] !== undefined) out[key] = source[key];
   }
   return out;
+}
+
+/** Une arrays de alertas/log por id (multi-cliente: no pisar crisis de otro rol). */
+export function mergeAppStateById(
+  existing: unknown,
+  incoming: unknown,
+): Record<string, unknown>[] {
+  const map = new Map<string, Record<string, unknown>>();
+  const put = (row: unknown) => {
+    if (!row || typeof row !== 'object') return;
+    const r = row as Record<string, unknown>;
+    const id = String(r.id || '');
+    if (!id) return;
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, r);
+      return;
+    }
+    const rank = (a: Record<string, unknown>) => {
+      const s = String(a.status || '');
+      if (s === 'closed') return 4;
+      if (s === 'mine' || s === 'retry') return 3;
+      if (s === 'new') return 2;
+      return 1;
+    };
+    if (
+      rank(r) > rank(prev) ||
+      (rank(r) === rank(prev) && Number(r.at || 0) >= Number(prev.at || 0))
+    ) {
+      map.set(id, { ...prev, ...r });
+    }
+  };
+  (Array.isArray(existing) ? existing : []).forEach(put);
+  (Array.isArray(incoming) ? incoming : []).forEach(put);
+  return Array.from(map.values()).sort(
+    (a, b) => Number(b.at || 0) - Number(a.at || 0),
+  );
+}
+
+/**
+ * Solicitudes de ruta admin→clínico.
+ * No borrar pending si otro cliente persiste un array vacío/viejo.
+ * approved/rejected gana sobre pending.
+ */
+export function mergePathRequests(
+  existing: unknown,
+  incoming: unknown,
+): Record<string, unknown>[] {
+  const map = new Map<string, Record<string, unknown>>();
+  const put = (row: unknown) => {
+    if (!row || typeof row !== 'object') return;
+    const r = row as Record<string, unknown>;
+    const id = String(
+      r.id || `${r.code || ''}-${r.scope || 'all'}`,
+    );
+    if (!id || id === '-') return;
+    const norm = { ...r, id };
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, norm);
+      return;
+    }
+    const rank = (a: Record<string, unknown>) => {
+      const s = String(a.status || 'pending').toLowerCase();
+      if (s === 'approved' || s === 'rejected') return 3;
+      if (s === 'pending') return 1;
+      return 2;
+    };
+    const rAt = Math.max(Number(r.at || 0), Number(r.resolvedAt || 0));
+    const pAt = Math.max(Number(prev.at || 0), Number(prev.resolvedAt || 0));
+    if (rank(norm) > rank(prev) || (rank(norm) === rank(prev) && rAt >= pAt)) {
+      map.set(id, { ...prev, ...norm });
+    }
+  };
+  (Array.isArray(existing) ? existing : []).forEach(put);
+  (Array.isArray(incoming) ? incoming : []).forEach(put);
+  return Array.from(map.values()).sort(
+    (a, b) => Number(b.at || 0) - Number(a.at || 0),
+  );
+}
+
+/**
+ * Reglas: no pisar rules.pending del admin con un PUT del clínico sin pending.
+ * Solo se limpia si hay aprobación (versión nueva) o pendingClearedAt ≥ pending.at.
+ */
+export function mergeRulesSlice(
+  existing: unknown,
+  incoming: unknown,
+): Record<string, unknown> | unknown {
+  if (!incoming || typeof incoming !== 'object') return existing;
+  if (!existing || typeof existing !== 'object') return incoming;
+  const e = existing as Record<string, unknown>;
+  const i = incoming as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...e, ...i };
+  const ePend =
+    e.pending && typeof e.pending === 'object'
+      ? (e.pending as Record<string, unknown>)
+      : null;
+  const iPend =
+    i.pending && typeof i.pending === 'object'
+      ? (i.pending as Record<string, unknown>)
+      : null;
+
+  if (iPend && ePend) {
+    out.pending =
+      Number(iPend.at || 0) >= Number(ePend.at || 0) ? iPend : ePend;
+  } else if (iPend) {
+    out.pending = iPend;
+  } else if (ePend && (i.pending === null || i.pending === undefined)) {
+    const versions = Array.isArray(i.versions) ? i.versions : [];
+    const verAt = Number(
+      (versions[0] as { at?: unknown } | undefined)?.at || 0,
+    );
+    const cleared = Number(i.pendingClearedAt || 0);
+    const pendAt = Number(ePend.at || 0);
+    if (Math.max(verAt, cleared) >= pendAt && pendAt > 0) {
+      out.pending = null;
+    } else {
+      // Persist ajeno sin resolver → conservar solicitud pendiente.
+      out.pending = ePend;
+      if (e.risk !== undefined) out.risk = e.risk;
+      if (e.dig !== undefined) out.dig = e.dig;
+    }
+  } else {
+    out.pending = i.pending ?? null;
+  }
+  return out;
+}
+
+/** pathOverrides: unión de claves; incoming gana en conflicto. */
+export function mergePathOverrides(
+  existing: unknown,
+  incoming: unknown,
+): Record<string, unknown> {
+  const e =
+    existing && typeof existing === 'object' && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {};
+  const i =
+    incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+      ? (incoming as Record<string, unknown>)
+      : {};
+  return { ...e, ...i };
 }

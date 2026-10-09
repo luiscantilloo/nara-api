@@ -5,6 +5,17 @@ import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
 import { listCollection } from '../shared/list-collection';
 
+/** Flags solo por duración mínima (criterio retirado). */
+function isDurationOnlyFlag(f: { reasons?: unknown }): boolean {
+  const reasons = Array.isArray(f.reasons) ? f.reasons : [];
+  if (!reasons.length) return false;
+  return reasons.every((r) =>
+    /mínimo\s*20|minimo\s*20|menos de\s*20\s*minutos|entrevista de\s+\d+/i.test(
+      String(r || ''),
+    ),
+  );
+}
+
 @Injectable()
 export class FlagsService {
   constructor(
@@ -13,8 +24,8 @@ export class FlagsService {
     private readonly sessions: SessionService,
   ) {}
 
-  list(token: string | null) {
-    return listCollection(
+  async list(token: string | null) {
+    const result = await listCollection(
       this.store,
       this.sessions,
       token,
@@ -23,6 +34,38 @@ export class FlagsService {
       'flags',
       { at: -1 },
     );
+    if (!result || typeof result !== 'object' || !('flags' in result)) return result;
+    const flags = Array.isArray(result.flags) ? result.flags : [];
+    const obsolete = flags.filter((f) => isDurationOnlyFlag(f as { reasons?: unknown }));
+    const kept = flags.filter((f) => !isDurationOnlyFlag(f as { reasons?: unknown }));
+    if (obsolete.length) {
+      try {
+        const db = await this.mongo.db();
+        const ids = obsolete
+          .map((f) => String((f as { id?: string }).id || ''))
+          .filter(Boolean);
+        if (ids.length) {
+          await db.collection('flags').deleteMany({ id: { $in: ids } });
+        }
+        for (const f of obsolete) {
+          const flag = f as {
+            fromVisit?: boolean;
+            wid?: string;
+            expert?: string;
+            status?: string;
+          };
+          if (flag.fromVisit && flag.wid && flag.expert) {
+            await db.collection('worklist_items').updateOne(
+              { id: flag.wid, expertId: flag.expert },
+              { $set: { status: 'validada', updatedAt: new Date() } },
+            );
+          }
+        }
+      } catch {
+        /* list still returns filtered */
+      }
+    }
+    return { ...result, flags: kept };
   }
 
   async upsert(token: string | null, body: Record<string, unknown>) {

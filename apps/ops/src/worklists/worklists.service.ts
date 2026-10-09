@@ -62,6 +62,10 @@ export class WorklistsService {
     const db = await this.mongo.db();
     const now = new Date();
     const id = String(body.id || `p${Date.now().toString(36)}`);
+    const stamp =
+      Number(body.validatedAt) ||
+      Number(body.at) ||
+      Date.now();
     const doc = {
       id,
       expertId,
@@ -74,7 +78,8 @@ export class WorklistsService {
       profile: body.profile || null,
       code: body.code || null,
       phone: String(body.phone || ''),
-      at: Date.now(),
+      at: stamp,
+      validatedAt: stamp,
       updatedAt: now,
     };
     await db

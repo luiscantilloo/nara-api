@@ -15,21 +15,25 @@ export async function buildPatientContext(
 
   const snap = patient
     ? {
-        id: patient.id,
         name: patient.name,
         age: patient.age,
         place: patient.place,
         profile: patient.profile,
         status: patient.status,
         modulesEnabled: patient.modulesEnabled,
+        week: patient.week,
+        weeks: patient.weeks,
+        crisisLock: patient.crisisLock,
+        inactiveLock: patient.inactiveLock,
+        signal: patient.signal,
       }
     : null;
 
   return [
     APP_OVERVIEW,
-    'Rol del usuario que pregunta: paciente',
-    'Solo puede ver su propia ficha. No hay datos de otras personas.',
-    'Su ficha: ' + JSON.stringify(snap),
+    'Quién pregunta: paciente. Solo puede ver su propia información. No hay datos de otras personas.',
+    'Su situación en el programa: ' + JSON.stringify(snap),
+    'Explíquele con naturalidad su estado, módulos o ruta. Si pregunta por otros pacientes o del programa en general, diga con amabilidad que solo puede hablar de su acompañamiento.',
     'Pregunta: ' + question,
   ].join('\n\n');
 }

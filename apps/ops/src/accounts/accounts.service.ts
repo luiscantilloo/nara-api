@@ -20,12 +20,13 @@ export class AccountsService {
   ) {}
 
   list(token: string | null) {
+    // Admin + clínico: lastLoginAt para derivar Inactivo (mismo criterio en Personas / Mis pacientes).
     return listCollection(
       this.store,
       this.sessions,
       token,
       'accounts',
-      ['admin'],
+      ['admin', 'clinico'],
       'accounts',
       {
         name: 1,
@@ -42,6 +43,21 @@ export class AccountsService {
   async mePatch(token: string | null, body: Record<string, unknown>) {
     const auth = await requireRoles(this.sessions, token);
     if ('error' in auth) return auth.error;
+    const db = await this.mongo.db();
+    const now = new Date();
+
+    // Ping de actividad (clics / uso de la app) → renueva lastLoginAt.
+    if (body.touch === true) {
+      const at = Date.now();
+      await db
+        .collection('accounts')
+        .updateOne(
+          { id: auth.user.id },
+          { $set: { lastLoginAt: at, updatedAt: now } },
+        );
+      return { ok: true, status: 200, lastLoginAt: at };
+    }
+
     const name = String(body.name || '').trim();
     const contact = String(body.contact || '').trim();
     const org = String(body.org || '').trim();
@@ -53,8 +69,6 @@ export class AccountsService {
         error: 'Escriba un correo o celular de contacto.',
       };
 
-    const db = await this.mongo.db();
-    const now = new Date();
     const setDoc: Record<string, unknown> = { name, contact, updatedAt: now };
     if (org) setDoc.org = org;
     if (/@/.test(contact)) {
@@ -225,8 +239,9 @@ export class AccountsService {
 
     await col.updateOne({ id }, update, { upsert: true });
 
+    let syncedPerson: Record<string, unknown> | null = null;
     if (roleId === 'paciente') {
-      await this.syncPatient(
+      syncedPerson = await this.syncPatient(
         db,
         id,
         name,
@@ -236,7 +251,19 @@ export class AccountsService {
         patientModules,
         existingById,
         now,
+        body,
       );
+      if (syncedPerson?.id) {
+        await col.updateOne(
+          { id },
+          {
+            $set: {
+              patientId: syncedPerson.id,
+              personId: syncedPerson.id,
+            },
+          },
+        );
+      }
     }
     if (roleId === 'experto') {
       try {
@@ -262,9 +289,59 @@ export class AccountsService {
       ok: true,
       status: 200,
       account: publicAcc,
+      person: syncedPerson || undefined,
       href: roleDoc?.href || '/ingreso',
       passwordSet: !!password,
     };
+  }
+
+  private async resolveExpertForTerr(
+    db: Awaited<ReturnType<MongoStore['db']>>,
+    terrName: string,
+  ): Promise<{ name: string; id: string } | null> {
+    if (!terrName) return null;
+    const ex = await db.collection('experts').findOne({
+      terr: terrName,
+      active: { $ne: false },
+    });
+    if (ex) {
+      return {
+        name: String(ex.name || ''),
+        id: String(ex.accountId || ex.id || ''),
+      };
+    }
+    // Fallback: cuenta con rol experto en ese territorio.
+    const acc = await db.collection('accounts').findOne({
+      terr: terrName,
+      status: 'Activo',
+      $or: [{ roleId: 'experto' }, { role: 'Experto de campo' }],
+    });
+    if (acc) {
+      return {
+        name: String(acc.name || ''),
+        id: String(acc.id || ''),
+      };
+    }
+    return null;
+  }
+
+  private async nextPersonCode(
+    db: Awaited<ReturnType<MongoStore['db']>>,
+    terrName: string,
+  ): Promise<string> {
+    const TCODE: Record<string, string> = {
+      Salento: 'SAL',
+      Armenia: 'ARM',
+      Calarcá: 'CAL',
+      Pereira: 'PER',
+      Manizales: 'MAN',
+      Chinchiná: 'CHI',
+      Prueba: 'PRU',
+    };
+    const pre =
+      TCODE[terrName] || terrName.slice(0, 3).toUpperCase() || 'NAR';
+    const count = await db.collection('people').countDocuments();
+    return `${pre}-${1000 + count + 1}`;
   }
 
   private async syncPatient(
@@ -277,30 +354,250 @@ export class AccountsService {
     patientModules: string[],
     existingById: Record<string, unknown> | null,
     now: Date,
-  ) {
-    const patientId = String(existingById?.patientId || `sm-acc-${id}`);
+    body: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    const fromBody = String(body.personId || body.patientId || '').trim();
+    const origin = String(body.origin || body.source || '').toLowerCase();
+    const fromAdmin =
+      origin === 'admin' ||
+      origin === 'importacion' ||
+      origin === 'import' ||
+      origin === 'manual';
+    // Admin / importación → Sin evaluación. Experto (tras eval) → Por aprobar.
+    const forcedStatus = String(body.patientStatus || '').trim();
+
+    const patientId = String(
+      fromBody || existingById?.patientId || `sm-acc-${id}`,
+    );
+    let personDoc = fromBody
+      ? await db.collection('people').findOne({
+          $or: [{ id: fromBody }, { code: fromBody }],
+        })
+      : null;
     const existingPatient =
+      (fromBody
+        ? await db.collection('patients').findOne({
+            $or: [{ id: fromBody }, { code: fromBody }],
+          })
+        : null) ||
       (await db.collection('patients').findOne({ accountId: id })) ||
       (await db.collection('patients').findOne({ email: emailRaw })) ||
       (await db.collection('patients').findOne({ id: patientId }));
-    const pid = String(existingPatient?.id || patientId);
+    const pid = String(
+      existingPatient?.id || personDoc?.id || patientId,
+    );
+
+    const bodyFirst = String(body.firstName || '').trim();
+    const bodyLast = String(body.lastName || '').trim();
+    const firstName = String(
+      bodyFirst || personDoc?.firstName || existingPatient?.firstName || '',
+    ).trim();
+    const lastName = String(
+      bodyLast || personDoc?.lastName || existingPatient?.lastName || '',
+    ).trim();
+    const fullName =
+      [firstName, lastName].filter(Boolean).join(' ') ||
+      String(personDoc?.name || '').trim() ||
+      name;
+    const place = String(
+      body.place || personDoc?.place || existingPatient?.place || '',
+    ).trim();
+    const birthDate = String(
+      body.birthDate || personDoc?.birthDate || existingPatient?.birthDate || '',
+    );
+    const age =
+      Number(body.age) ||
+      Number(personDoc?.age ?? existingPatient?.age) ||
+      0;
+    const genero = String(
+      body.genero || personDoc?.genero || existingPatient?.genero || '',
+    );
+    const estadoCivil = String(
+      body.estadoCivil ||
+        personDoc?.estadoCivil ||
+        existingPatient?.estadoCivil ||
+        '',
+    );
+    const estrato = String(
+      body.estrato || personDoc?.estrato || existingPatient?.estrato || '',
+    );
+    const phoneFromPerson = String(
+      body.phone || personDoc?.phone || existingPatient?.phone || '',
+    );
+    const phone = /@/.test(contact) ? phoneFromPerson : contact || phoneFromPerson;
+    const terrName = String(body.terr || personDoc?.terr || terr || '').trim();
+    const rural =
+      body.rural != null
+        ? !!body.rural
+        : /vereda/i.test(place) ||
+          !!(personDoc?.rural ?? existingPatient?.rural);
+    const source = String(
+      body.source ||
+        personDoc?.source ||
+        existingPatient?.source ||
+        (fromAdmin ? (origin === 'manual' ? 'admin-manual' : 'admin') : ''),
+    );
+
+    // Clínico por territorio (misma lógica de campo).
+    let clin = String(personDoc?.clin || existingPatient?.clin || body.clin || '').trim();
+    if (!clin && terrName) {
+      const t = terrName.toLowerCase();
+      if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
+        clin = 'Dr. Felipe Ruiz';
+      } else if (
+        /manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)
+      ) {
+        clin = 'Dra. Carolina Úsuga';
+      } else {
+        clin = 'Dra. Lucía Marín';
+      }
+    }
+
+    // Experto del territorio al crear (no esperar a la evaluación).
+    let expert = String(
+      body.expert || personDoc?.expert || existingPatient?.expert || '',
+    ).trim();
+    let expertId = String(
+      body.expertId ||
+        personDoc?.expertId ||
+        existingPatient?.expertId ||
+        '',
+    ).trim();
+    if ((!expert || !expertId) && terrName) {
+      const assigned = await this.resolveExpertForTerr(db, terrName);
+      if (assigned) {
+        if (!expert) expert = assigned.name;
+        if (!expertId) expertId = assigned.id;
+      }
+    }
+
+    // Código NARA al crear (no esperar a la evaluación).
+    let code = String(
+      personDoc?.code || existingPatient?.code || body.code || '',
+    ).trim();
+    if (!code) {
+      code = await this.nextPersonCode(db, terrName);
+    }
+
+    // Manual/import admin → Sin evaluación. Enlace a ficha de campo → respeta estado existente.
+    const clinicalStatus = String(
+      forcedStatus ||
+        (!fromBody && fromAdmin
+          ? 'Sin evaluación'
+          : personDoc?.status ||
+            existingPatient?.status ||
+            (fromAdmin ? 'Sin evaluación' : 'Por aprobar')),
+    );
+    const profile = personDoc?.profile ?? existingPatient?.profile ?? null;
+
     const prevVisible = normalizeModuleIds(existingPatient?.modulesVisible);
     const modulesVisible = prevVisible.filter((m) =>
       patientModules.includes(m),
     );
+
+    const peopleSet: Record<string, unknown> = {
+      id: pid,
+      code,
+      name: fullName,
+      firstName,
+      lastName,
+      email: emailRaw,
+      phone,
+      terr: terrName,
+      place: place || terrName,
+      rural,
+      age,
+      birthDate,
+      genero,
+      estadoCivil,
+      estrato,
+      accountId: id,
+      expert,
+      expertId,
+      clin,
+      status: clinicalStatus,
+      updatedAt: now,
+    };
+
+    if (!fromBody) {
+      // Alta manual (o importación): crear ficha completa en people.
+      await db.collection('people').updateOne(
+        { id: pid },
+        {
+          $set: {
+            ...peopleSet,
+            profile: null,
+            source: source || 'admin-manual',
+          },
+          $setOnInsert: {
+            week: 0,
+            weeks: 13,
+            createdAt: now,
+          },
+        },
+        { upsert: true },
+      );
+    } else {
+      // Desde campo: enlazar cuenta y completar experto/código/clínico si faltaban.
+      const peopleQ = personDoc?.id
+        ? { id: String(personDoc.id) }
+        : { $or: [{ id: fromBody }, { code: fromBody }] };
+      const patch: Record<string, unknown> = {
+        accountId: id,
+        email: emailRaw,
+        updatedAt: now,
+      };
+      if (firstName) patch.firstName = firstName;
+      if (lastName) patch.lastName = lastName;
+      if (code) patch.code = code;
+      if (expert) patch.expert = expert;
+      if (expertId) patch.expertId = expertId;
+      if (clin) patch.clin = clin;
+      if (terrName && !personDoc?.terr) patch.terr = terrName;
+      await db.collection('people').updateOne(peopleQ, { $set: patch });
+    }
+
+    personDoc = await db.collection('people').findOne({ id: pid });
+    if (!personDoc && fromBody) {
+      personDoc = await db.collection('people').findOne({
+        $or: [{ id: fromBody }, { code: fromBody }],
+      });
+    }
+    const finalCode = String(personDoc?.code || code);
+    const finalExpert = String(personDoc?.expert || expert);
+    const finalExpertId = String(personDoc?.expertId || expertId);
+    const finalClin = personDoc?.clin ?? clin;
+
     await db.collection('patients').updateOne(
-      { id: pid },
+      { id: String(personDoc?.id || pid) },
       {
         $set: {
-          id: pid,
+          id: String(personDoc?.id || pid),
+          code: finalCode,
           accountId: id,
-          name,
+          name: fullName,
+          firstName,
+          lastName,
           email: emailRaw,
-          phone: /@/.test(contact)
-            ? String(existingPatient?.phone || '')
-            : contact,
-          terr,
-          place: String(existingPatient?.place || terr || ''),
+          phone,
+          terr: String(personDoc?.terr || terrName),
+          place: place || terrName,
+          rural,
+          age,
+          birthDate,
+          sexo: String(personDoc?.sexo || existingPatient?.sexo || ''),
+          genero,
+          estadoCivil,
+          estrato,
+          source,
+          profile,
+          status: clinicalStatus,
+          signal: clinicalStatus,
+          expert: finalExpert,
+          expertId: finalExpertId,
+          clin: finalClin,
+          week: Number(personDoc?.week ?? existingPatient?.week) || 0,
+          weeks: Number(personDoc?.weeks ?? existingPatient?.weeks) || 13,
           modulesEnabled: patientModules,
           modulesVisible: modulesVisible.length
             ? modulesVisible
@@ -308,16 +605,11 @@ export class AccountsService {
           updatedAt: now,
         },
         $setOnInsert: {
-          age: 0,
-          profile: null,
           phq: [],
           phqDates: [],
-          expert: '',
-          clin: null,
           next: 'Primera llamada dentro de 7 días',
           nextShort: 'Primera llamada',
           consent: true,
-          signal: 'Pendiente de evaluación',
           ctx: { dano: 0, perdida: 0 },
           timeline: [],
           createdAt: now,
@@ -325,9 +617,17 @@ export class AccountsService {
       },
       { upsert: true },
     );
-    await db
-      .collection('accounts')
-      .updateOne({ id }, { $set: { patientId: pid } });
+
+    return (personDoc || {
+      id: pid,
+      code: finalCode,
+      name: fullName,
+      expert: finalExpert,
+      expertId: finalExpertId,
+      clin: finalClin,
+      terr: terrName,
+      status: clinicalStatus,
+    }) as Record<string, unknown>;
   }
 
   private async syncExpert(

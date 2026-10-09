@@ -84,6 +84,7 @@ export class PeopleService {
       'admin',
       'experto',
       'clinico',
+      'paciente',
     ]);
     if ('error' in auth) return auth.error;
 
@@ -92,10 +93,108 @@ export class PeopleService {
     if (!name)
       return { ok: false, status: 400, error: 'El nombre es obligatorio.' };
     const now = new Date();
-    const id = String(body.id || `p${Date.now().toString(36)}`);
-    const existing = body.id
-      ? await this.store.findOne('people', { id })
-      : null;
+    const bodyId = String(body.id || '').trim();
+    const bodyCode = String(body.code || '').trim();
+
+    // Paciente: Crisis (ayuda) o Activo (estoy bien) en su propia persona.
+    if (auth.user.roleId === 'paciente') {
+      const account = await this.store.findOne('accounts', {
+        id: auth.user.id,
+      });
+      const linked =
+        (account?.patientId ? String(account.patientId) : '') ||
+        (
+          await this.store.findOne('patients', { accountId: auth.user.id })
+        )?.id;
+      const ownId = linked ? String(linked) : bodyId;
+      if (!ownId) {
+        return {
+          ok: false,
+          status: 404,
+          error: 'Sin ficha vinculada.',
+        };
+      }
+      const status = String(body.status || body.signal || '').trim();
+      const isCrisis = /^crisis$/i.test(status);
+      const isInactive =
+        /^inactivo$/i.test(status) || body.inactiveLock === true;
+      const isWell =
+        /^activo$/i.test(status) ||
+        body.crisisLock === false ||
+        body.inactiveLock === false;
+      if (!isCrisis && !isInactive && !isWell) {
+        return {
+          ok: false,
+          status: 403,
+          error:
+            'El paciente solo puede reportar Crisis, Inactivo o confirmar Volví / estoy bien.',
+        };
+      }
+      const nextStatus = isCrisis
+        ? 'Crisis'
+        : isInactive && !isWell
+          ? 'Inactivo'
+          : 'Activo';
+      const patientPatch: Record<string, unknown> = isCrisis
+        ? {
+            status: 'Crisis',
+            signal: 'Crisis',
+            crisisLock: true,
+            inactiveLock: false,
+            crisisAttendedAt: null,
+            crisisAttendedOutcome: null,
+            crisisBtnReady: false,
+            updatedAt: now,
+          }
+        : isInactive && !isWell
+          ? {
+              status: 'Inactivo',
+              signal: 'Inactivo',
+              inactiveLock: true,
+              updatedAt: now,
+            }
+          : {
+              status: 'Activo',
+              signal: 'Activo',
+              crisisLock: false,
+              inactiveLock: false,
+              activeAt: Date.now(),
+              crisisAttendedAt: null,
+              crisisAttendedOutcome: null,
+              crisisBtnReady: true,
+              crisisBtnReadyAt: Date.now(),
+              updatedAt: now,
+            };
+      await this.store.updateOne(
+        'people',
+        { id: ownId },
+        {
+          $set: {
+            status: nextStatus,
+            inactiveLock: nextStatus === 'Inactivo',
+            ...(nextStatus === 'Activo' ? { activeAt: Date.now() } : {}),
+            updatedAt: now,
+          },
+        },
+      );
+      await this.store.updateOne('patients', { id: ownId }, { $set: patientPatch });
+      const person = await this.store.findOne('people', { id: ownId });
+      if (!person)
+        return { ok: false, status: 404, error: 'Persona no encontrada.' };
+      return { ok: true, status: 200, person: publicPerson(person) };
+    }
+
+    // Resolver ficha real: el worklist a veces manda otro id distinto al de people.
+    let existing =
+      (bodyId ? await this.store.findOne('people', { id: bodyId }) : null) ||
+      (bodyCode
+        ? await this.store.findOne('people', { code: bodyCode })
+        : null) ||
+      (name ? await this.store.findOne('people', { name }) : null);
+    const id = String(existing?.id || bodyId || `p${Date.now().toString(36)}`);
+    if (!existing && bodyId) {
+      existing = await this.store.findOne('people', { id: bodyId });
+    }
     const terr = String(body.terr ?? existing?.terr ?? '').trim();
     const pre =
       (
@@ -134,14 +233,20 @@ export class PeopleService {
         ? String(body.status)
         : String(existing?.status || 'Sin evaluación');
 
+    const pick = (key: string, fallback = '') =>
+      body[key] != null ? String(body[key]) : String(existing?.[key] ?? fallback);
+
     const doc: Record<string, unknown> = {
       id,
       code,
       name: name || String(existing?.name || ''),
+      firstName: pick('firstName'),
+      lastName: pick('lastName'),
       age:
         body.age != null
           ? Number(body.age) || 0
           : Number(existing?.age) || 0,
+      birthDate: pick('birthDate'),
       place:
         body.place != null
           ? String(body.place)
@@ -168,18 +273,77 @@ export class PeopleService {
       expert,
       expertId,
       status,
-      clin:
-        body.clin !== undefined
-          ? body.clin || null
-          : existing?.clin || null,
+      inactiveLock:
+        body.inactiveLock !== undefined
+          ? body.inactiveLock === true
+          : existing?.inactiveLock === true,
+      activeAt:
+        body.activeAt !== undefined
+          ? body.activeAt == null
+            ? null
+            : Number(body.activeAt) || Date.now()
+          : /^activo$/i.test(String(status)) &&
+              !/^activo$/i.test(String(existing?.status || ''))
+            ? Date.now() // primera vez que pasa a Activo → arranca reloj de inactividad
+            : existing?.activeAt != null
+              ? Number(existing.activeAt) || null
+              : null,
+      clin: (() => {
+        if (body.clin !== undefined) return body.clin || null;
+        if (existing?.clin) return existing.clin;
+        // Clínico por territorio al crear la ficha (no esperar evaluación).
+        const t = terr.toLowerCase();
+        if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
+          return 'Dr. Felipe Ruiz';
+        }
+        if (/manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)) {
+          return 'Dra. Carolina Úsuga';
+        }
+        return terr ? 'Dra. Lucía Marín' : null;
+      })(),
       phone:
         body.phone != null
           ? String(body.phone)
           : String(existing?.phone || ''),
+      email: pick('email').trim().toLowerCase(),
+      sexo: pick('sexo'),
+      genero: pick('genero'),
+      estadoCivil: pick('estadoCivil'),
+      estrato: pick('estrato'),
       pendingEval:
         body.pendingEval !== undefined
           ? body.pendingEval === true
           : existing?.pendingEval === true,
+      evalAt:
+        body.evalAt !== undefined
+          ? body.evalAt == null
+            ? null
+            : Number(body.evalAt) || Date.now()
+          : existing?.evalAt || null,
+      evalBy:
+        body.evalBy !== undefined
+          ? body.evalBy == null
+            ? null
+            : String(body.evalBy)
+          : existing?.evalBy || null,
+      evalPhq:
+        body.evalPhq !== undefined
+          ? body.evalPhq == null
+            ? null
+            : Number(body.evalPhq)
+          : existing?.evalPhq ?? null,
+      evalDig:
+        body.evalDig !== undefined
+          ? body.evalDig == null
+            ? null
+            : Number(body.evalDig)
+          : existing?.evalDig ?? null,
+      finalEvalAt:
+        body.finalEvalAt !== undefined
+          ? body.finalEvalAt == null
+            ? null
+            : Number(body.finalEvalAt) || Date.now()
+          : existing?.finalEvalAt || null,
       updatedAt: now,
     };
     if (body.previousProfile !== undefined) {
@@ -191,6 +355,63 @@ export class PeopleService {
       doc.previousProfile = existing.previousProfile;
     }
     await this.store.upsert('people', { id }, doc);
+
+    // Espejo clínico: Mis pacientes / admin leen colección patients.
+    if (
+      doc.profile ||
+      doc.pendingEval === true ||
+      body.pendingEval === false ||
+      /por\s*aprobar|activo|aprobado|rechazad|terminado/i.test(
+        String(doc.status || ''),
+      )
+    ) {
+      const existingPat = await this.store.findOne('patients', { id });
+      const patSet: Record<string, unknown> = {
+        id,
+        code: doc.code,
+        name: doc.name,
+        age: doc.age,
+        place: doc.place || doc.terr || '',
+        terr: doc.terr,
+        phone: doc.phone,
+        expert: doc.expert,
+        clin: doc.clin,
+        profile: doc.profile,
+        status: doc.status,
+        signal: doc.status,
+        pendingEval: doc.pendingEval === true,
+        previousProfile: doc.previousProfile ?? null,
+        evalAt: doc.evalAt,
+        evalBy: doc.evalBy,
+        evalPhq: doc.evalPhq,
+        evalDig: doc.evalDig,
+        finalEvalAt: doc.finalEvalAt,
+        inactiveLock: doc.inactiveLock === true,
+        activeAt: doc.activeAt ?? null,
+        updatedAt: now,
+      };
+      if (doc.evalPhq != null) {
+        const prevPhq = Array.isArray(existingPat?.phq)
+          ? (existingPat!.phq as number[])
+          : [];
+        const last = prevPhq.length ? prevPhq[prevPhq.length - 1] : null;
+        if (last !== Number(doc.evalPhq)) {
+          patSet.phq = prevPhq.concat([Number(doc.evalPhq)]);
+          const prevDates = Array.isArray(existingPat?.phqDates)
+            ? (existingPat!.phqDates as string[])
+            : [];
+          patSet.phqDates = prevDates.concat(['Hoy']);
+        }
+      }
+      Object.keys(patSet).forEach((k) => {
+        if (patSet[k] === undefined) delete patSet[k];
+      });
+      await this.store.upsert('patients', { id }, {
+        ...(existingPat || {}),
+        ...patSet,
+      });
+    }
+
     return { ok: true, status: 200, person: publicPerson(doc) };
   }
 }

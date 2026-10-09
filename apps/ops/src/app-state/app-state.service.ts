@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import {
   APP_STATE_KEY,
   APP_STATE_SLICES,
+  mergeAppStateById,
+  mergePathOverrides,
+  mergePathRequests,
+  mergeRulesSlice,
   pickAppStateSlices,
 } from '@nara/common';
 import { MongoStore } from '@nara/database';
@@ -52,6 +56,57 @@ export class AppStateService {
     const slices = pickAppStateSlices(body.slices as Record<string, unknown>);
     const db = await this.mongo.db();
     const now = new Date();
+    const existing = await db
+      .collection('program_settings')
+      .findOne({ key: APP_STATE_KEY });
+
+    // Multi-cliente: unir alertas/log/cerradas para que «Estoy en crisis» del
+    // paciente no lo pise un persist viejo del clínico (y viceversa al cerrar).
+    if (slices.closedToday !== undefined || existing?.closedToday) {
+      slices.closedToday = mergeAppStateById(
+        existing?.closedToday,
+        slices.closedToday,
+      );
+    }
+    if (slices.crisisLog !== undefined || existing?.crisisLog) {
+      slices.crisisLog = mergeAppStateById(
+        existing?.crisisLog,
+        slices.crisisLog,
+      );
+    }
+    if (slices.alerts !== undefined || existing?.alerts) {
+      const closedIds = new Set(
+        (Array.isArray(slices.closedToday)
+          ? slices.closedToday
+          : Array.isArray(existing?.closedToday)
+            ? existing.closedToday
+            : []
+        )
+          .map((c: { id?: unknown }) => String(c?.id || ''))
+          .filter(Boolean),
+      );
+      slices.alerts = mergeAppStateById(existing?.alerts, slices.alerts).filter(
+        (a) => !closedIds.has(String(a.id || '')),
+      );
+    }
+
+    // Aprobaciones admin→clínico: no pisar con persist vacío de otro rol.
+    if (slices.pathRequests !== undefined || existing?.pathRequests) {
+      slices.pathRequests = mergePathRequests(
+        existing?.pathRequests,
+        slices.pathRequests,
+      );
+    }
+    if (slices.pathOverrides !== undefined || existing?.pathOverrides) {
+      slices.pathOverrides = mergePathOverrides(
+        existing?.pathOverrides,
+        slices.pathOverrides,
+      );
+    }
+    if (slices.rules !== undefined || existing?.rules) {
+      slices.rules = mergeRulesSlice(existing?.rules, slices.rules);
+    }
+
     await db.collection('program_settings').updateOne(
       { key: APP_STATE_KEY },
       {
