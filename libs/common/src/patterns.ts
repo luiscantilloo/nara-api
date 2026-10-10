@@ -165,11 +165,23 @@ export function mergePathRequests(
     const rank = (a: Record<string, unknown>) => {
       const s = String(a.status || 'pending').toLowerCase();
       if (s === 'approved' || s === 'rejected') return 3;
+      if (s === 'superseded') return 2;
       if (s === 'pending') return 1;
       return 2;
     };
     const rAt = Math.max(Number(r.at || 0), Number(r.resolvedAt || 0));
     const pAt = Math.max(Number(prev.at || 0), Number(prev.resolvedAt || 0));
+    const rSt = String(norm.status || 'pending').toLowerCase();
+    const pSt = String(prev.status || 'pending').toLowerCase();
+    // Pending nuevo (reenvío admin) gana sobre approved/rejected del mismo id.
+    if (
+      rSt === 'pending' &&
+      (pSt === 'approved' || pSt === 'rejected' || pSt === 'superseded') &&
+      Number(norm.at || 0) > pAt
+    ) {
+      map.set(id, norm);
+      return;
+    }
     if (rank(norm) > rank(prev) || (rank(norm) === rank(prev) && rAt >= pAt)) {
       map.set(id, { ...prev, ...norm });
     }
