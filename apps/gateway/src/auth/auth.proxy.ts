@@ -10,16 +10,19 @@ export class AuthProxyController {
 
   @Post('login')
   async login(
-    @Body() body: { email?: string; password?: string },
+    @Body() body: { email?: unknown; password?: unknown },
     @Res() res: Response,
   ) {
+    // H-007: correo y clave deben ser texto; un objeto ({"$gt":""}) es una petición inválida.
+    const email = body?.email ?? '';
+    const password = body?.password ?? '';
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Correo y contraseña deben ser texto.' });
+    }
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_LOGIN,
-      {
-        email: body.email || '',
-        password: body.password || '',
-      },
+      { email, password },
     );
     return sendResult(res, result);
   }
@@ -33,12 +36,13 @@ export class AuthProxyController {
 
   @Get('me')
   async me(@Req() req: Request, @Res() res: Response) {
+    // H-015: sin cookie no hay nada que validar; responder «sin sesión» sin error en la consola.
+    const token = readToken(req);
+    if (!token) return res.status(200).json({ ok: true, user: null });
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_ME,
-      {
-        token: readToken(req),
-      },
+      { token },
     );
     return sendResult(res, result);
   }

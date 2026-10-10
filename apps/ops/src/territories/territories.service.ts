@@ -21,7 +21,11 @@ export class TerritoriesService {
       'territories',
       ['admin', 'experto', 'clinico', 'observador'],
       'territories',
-      { name: 1 },
+      {
+        sort: { name: 1 },
+        // H-006: solo el admin ve los territorios desactivados.
+        filterFor: (roleId) => (roleId === 'admin' ? {} : { active: { $ne: false } }),
+      },
     );
   }
 
@@ -53,13 +57,17 @@ export class TerritoriesService {
       isNew: !!body.isNew,
       pace: Number(body.pace) || 0,
       updatedAt: now,
-    };
+    } as Record<string, unknown>;
+    // H-006: `active` solo cambia si viene explícito; un territorio nuevo nace activo.
+    const setOnInsert: Record<string, unknown> = { createdAt: now };
+    if (typeof body.active === 'boolean') doc.active = body.active;
+    else setOnInsert.active = true;
     const db = await this.mongo.db();
     await db
       .collection('territories')
       .updateOne(
         { name },
-        { $set: doc, $setOnInsert: { createdAt: now } },
+        { $set: doc, $setOnInsert: setOnInsert },
         { upsert: true },
       );
     return { ok: true, status: 200, territory: doc };

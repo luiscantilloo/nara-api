@@ -21,7 +21,14 @@ export class ExpertsService {
       'experts',
       ['admin', 'experto', 'clinico', 'observador'],
       'experts',
-      { name: 1 },
+      {
+        sort: { name: 1 },
+        // H-004: el observador solo ve cuántos expertos hay por territorio, sin nombre ni contacto.
+        mapFor: (roleId) =>
+          roleId === 'observador'
+            ? (r, i) => ({ id: `anon-${i + 1}`, terr: r.terr ?? null, active: r.active !== false })
+            : null,
+      },
     );
   }
 

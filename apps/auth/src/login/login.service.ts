@@ -56,7 +56,10 @@ export class LoginService {
     private readonly sessions: SessionService,
   ) {}
 
-  async login(emailRaw: string, password: string) {
+  async login(emailRaw: unknown, password: unknown) {
+    if (typeof emailRaw !== 'string' || typeof password !== 'string') {
+      return { ok: false, status: 400, error: 'Correo y contraseña deben ser texto.' };
+    }
     const email = String(emailRaw || '')
       .trim()
       .toLowerCase();

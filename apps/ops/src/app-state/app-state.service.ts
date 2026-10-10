@@ -72,7 +72,8 @@ export class AppStateService {
       ids,
     );
     if (!Object.keys(slices).length) {
-      return { ok: true, status: 200, ignored: true };
+      // H-011: si nada de lo enviado le está permitido a este rol, se rechaza en vez de fingir que se guardó.
+      return { ok: false, status: 403, error: 'Sin permiso para guardar estos datos.' };
     }
 
     // Multi-cliente: unir alertas/log/cerradas para que «Estoy en crisis» del

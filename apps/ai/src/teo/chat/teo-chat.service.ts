@@ -21,7 +21,6 @@ export class TeoChatService {
     profile?: string;
     age?: number | string;
     messages?: unknown[];
-    system?: string;
   }) {
     const auth = await requireRoles(this.sessions, data.token, ['paciente']);
     if ('error' in auth) return auth.error;
@@ -69,7 +68,11 @@ export class TeoChatService {
         : '(sin ficha en Mongo)';
 
       if (!isLlmConfigured()) {
-        return { ok: true, status: 200, fallback: true, text: '' };
+        return {
+          ok: false,
+          status: 503,
+          error: 'TEO no tiene un proveedor de IA configurado.',
+        };
       }
 
       const system = `${TEO_VOICE}
@@ -96,13 +99,7 @@ TEO:`;
       return { ok: true, status: 200, text: text.trim(), model, provider };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error en TEO';
-      return {
-        ok: true,
-        status: 200,
-        fallback: true,
-        text: '',
-        error: message,
-      };
+      return { ok: false, status: 503, error: message };
     }
   }
 }

@@ -4,7 +4,8 @@ import { andScope, inScope, terrFilter } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
-import { observerPerson, publicPerson } from '../shared/mappers/person.mapper';
+import { publicPerson } from '../shared/mappers/person.mapper';
+import { observerSummary } from '../shared/mappers/observer-summary';
 
 @Injectable()
 export class PeopleService {
@@ -28,14 +29,19 @@ export class PeopleService {
     ]);
     if ('error' in auth) return auth.error;
 
+    // H-004 (TRL 2026-10-10): el observador solo recibe conteos agregados, nunca filas por persona.
+    if (auth.user.roleId === 'observador') {
+      const rows = await this.store.findMany('people', { archived: { $ne: true } }, { limit: 20000 });
+      return { ok: true, status: 200, summary: observerSummary(rows) };
+    }
+
     const client: Record<string, unknown> = {};
     if (data.terr) client.terr = data.terr;
     if (data.q) client.name = { $regex: data.q, $options: 'i' };
-    // SPEC-02 FR-02.1: el servidor aplica el territorio; el observador ve todo, pero anonimizado (FR-02.4).
-    const isObserver = auth.user.roleId === 'observador';
-    const scope = isObserver ? {} : terrFilter(auth.user);
+    // SPEC-02 FR-02.1: el servidor aplica el territorio.
+    const scope = terrFilter(auth.user);
     if (!scope) return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
-    const filter = isObserver ? {} : andScope(scope, client);
+    const filter = andScope(andScope(scope, client), { archived: { $ne: true } });
     const limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
     const skip = Math.max(Number(data.skip) || 0, 0);
     const [total, rows] = await Promise.all([
@@ -48,8 +54,26 @@ export class PeopleService {
       total,
       limit,
       skip,
-      people: isObserver ? rows.map((r, i) => observerPerson(r, i)) : rows.map(publicPerson),
+      people: rows.map(publicPerson),
     };
+  }
+
+  /**
+   * H-013: archivar una persona (solo admin). No se borra: queda `archived` con quién y cuándo,
+   * y deja de aparecer en las listas. Sirve para retirar registros de prueba o duplicados.
+   */
+  async archive(data: { token: string | null; id: string; reason?: string }) {
+    const auth = await requireRoles(this.sessions, data.token, ['admin']);
+    if ('error' in auth) return auth.error;
+    const id = String(data.id || '').trim();
+    if (!id) return { ok: false, status: 400, error: 'Falta el id.' };
+    const person = await this.store.findOne('people', { id });
+    if (!person) return { ok: false, status: 404, error: 'Persona no encontrada.' };
+    const now = new Date();
+    const archivedBy = { id: auth.user.id, at: now, reason: String(data.reason || '').slice(0, 200) };
+    await this.store.updateOne('people', { id }, { $set: { archived: true, archivedBy, updatedAt: now } });
+    await this.store.updateOne('patients', { id }, { $set: { archived: true, archivedBy, updatedAt: now } });
+    return { ok: true, status: 200, id, archived: true };
   }
 
   /**

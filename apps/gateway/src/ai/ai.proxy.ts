@@ -57,7 +57,6 @@ export class AiProxyController {
           profile: body.profile,
           age: body.age,
           messages: body.messages,
-          system: body.system,
         },
       );
       return sendResult(res, result);

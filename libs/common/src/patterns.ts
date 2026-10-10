@@ -11,6 +11,7 @@ export const Patterns = {
 
   PEOPLE_LIST: 'people.list',
   PEOPLE_UPSERT: 'people.upsert',
+  PEOPLE_ARCHIVE: 'people.archive',
   PATIENTS_LIST: 'patients.list',
   PATIENTS_UPSERT: 'patients.upsert',
   PATIENTS_ME: 'patients.me',

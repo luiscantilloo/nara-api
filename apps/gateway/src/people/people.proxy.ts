@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Patch,
   Post,
   Query,
@@ -53,6 +54,21 @@ export class PeopleProxyController {
         token: readToken(req),
         body,
       },
+    );
+    return sendResult(res, result);
+  }
+
+  @Post('people/:id/archive')
+  async archivePerson(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const result = await this.proxy.send<Record<string, unknown>>(
+      'people',
+      Patterns.PEOPLE_ARCHIVE,
+      { token: readToken(req), id, reason: body?.reason },
     );
     return sendResult(res, result);
   }

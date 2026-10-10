@@ -27,4 +27,9 @@ export class PeopleController {
   ) {
     return this.people.upsert(data);
   }
+
+  @MessagePattern(Patterns.PEOPLE_ARCHIVE)
+  archive(@Payload() data: { token: string | null; id: string; reason?: string }) {
+    return this.people.archive(data);
+  }
 }

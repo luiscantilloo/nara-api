@@ -11,7 +11,7 @@ export class HealthController {
   /** Público (lo usa el monitor). SPEC-10 FR-10.5: incluye el commit desplegado. */
   @Get('health')
   health() {
-    return { ok: true, service: 'nara-gateway', commit: process.env.RENDER_GIT_COMMIT || null };
+    return { ok: true, service: 'nara-gateway', commit: process.env.NARA_COMMIT || process.env.RENDER_GIT_COMMIT || null };
   }
 
   /** SPEC-05 FR-05.2: solo admin (401 sin sesión, 403 otro rol). */
