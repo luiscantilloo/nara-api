@@ -156,7 +156,7 @@ export function mergePathRequests(
       r.id || `${r.code || ''}-${r.scope || 'all'}`,
     );
     if (!id || id === '-') return;
-    const norm = { ...r, id };
+    const norm: Record<string, unknown> = { ...r, id };
     const prev = map.get(id);
     if (!prev) {
       map.set(id, norm);
@@ -177,7 +177,7 @@ export function mergePathRequests(
     if (
       rSt === 'pending' &&
       (pSt === 'approved' || pSt === 'rejected' || pSt === 'superseded') &&
-      Number(norm.at || 0) > pAt
+      rAt > pAt
     ) {
       map.set(id, norm);
       return;
