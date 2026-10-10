@@ -215,12 +215,17 @@ export class PeopleService {
     }
 
     // Resolver ficha real: el worklist a veces manda otro id distinto al de people.
+    // Reporte TRL 2026-10-10: las búsquedas por código o nombre nunca devuelven una ficha archivada, y la de
+    // nombre exige el mismo territorio. Antes una persona nueva podía caer sobre la ficha de otra (el código del
+    // front sale de un conteo y se repite) y sobrescribirla.
+    const activa = { archived: { $ne: true } };
+    const terrBody = String(body.terr || '').trim();
     let existing =
       (bodyId ? await this.store.findOne('people', { id: bodyId }) : null) ||
       (bodyCode
-        ? await this.store.findOne('people', { code: bodyCode })
+        ? await this.store.findOne('people', { code: bodyCode, ...activa })
         : null) ||
-      (name ? await this.store.findOne('people', { name }) : null);
+      (name && terrBody ? await this.store.findOne('people', { name, terr: terrBody, ...activa }) : null);
     const id = String(existing?.id || bodyId || `p${Date.now().toString(36)}`);
     if (!existing && bodyId) {
       existing = await this.store.findOne('people', { id: bodyId });
@@ -244,9 +249,15 @@ export class PeopleService {
       terr.slice(0, 3).toUpperCase() ||
       'NAR';
     const count = await this.store.count('people');
-    const code = String(
-      body.code || existing?.code || `${pre}-${1000 + count + 1}`,
-    );
+    // El código es único (índice). Si el que propone el cliente ya pertenece a otra ficha (por ejemplo, una
+    // archivada), la API asigna el siguiente libre en vez de fallar con 500.
+    let code = String(existing?.code || body.code || `${pre}-${1000 + count + 1}`);
+    const dueño = await this.store.findOne('people', { code });
+    if (dueño && String(dueño.id) !== id) {
+      let n = 1000 + count + 1;
+      while (await this.store.findOne('people', { code: `${pre}-${n}` })) n += 1;
+      code = `${pre}-${n}`;
+    }
 
     let expert = String(body.expert ?? existing?.expert ?? '').trim();
     let expertId =
