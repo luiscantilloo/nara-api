@@ -1,0 +1,19 @@
+# SPEC-10 FR-10.2 / OPS-5: compila y corre las pruebas en cada PR y en cada push a main.
+# Para que bloquee la fusión, proteger la rama main en GitHub y exigir este check.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
