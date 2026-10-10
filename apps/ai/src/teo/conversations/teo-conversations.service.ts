@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import type { Db } from 'mongodb';
+import { inScope, terrFilter } from '@nara/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../../shared/require-roles';
@@ -67,6 +69,115 @@ function publicRow(doc: Record<string, unknown>) {
   };
 }
 
+type ScopeUser = { id: string; roleId: string; terr?: string | null };
+
+/** Resuelve ficha people/patients y comprueba territorio (experto/clínico). */
+async function resolveScopedPatient(
+  db: Db,
+  user: ScopeUser,
+  opts: { patientId?: string; patientName?: string },
+): Promise<
+  | { ok: true; keys: string[] }
+  | { ok: false; status: number; error: string }
+> {
+  const scope = terrFilter(user);
+  if (!scope) {
+    return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+  }
+  const adminAll = !('terr' in scope);
+  const terrQ = adminAll ? {} : { terr: scope.terr };
+
+  const patientId = String(opts.patientId || '').trim();
+  const patientName = String(opts.patientName || '').trim();
+
+  if (patientId) {
+    const hit =
+      (await db.collection('patients').findOne({
+        $and: [
+          terrQ,
+          {
+            $or: [
+              { id: patientId },
+              { accountId: patientId },
+              { code: patientId },
+            ],
+          },
+        ],
+      })) ||
+      (await db.collection('people').findOne({
+        $and: [
+          terrQ,
+          {
+            $or: [
+              { id: patientId },
+              { accountId: patientId },
+              { code: patientId },
+            ],
+          },
+        ],
+      }));
+    if (!hit) {
+      return {
+        ok: false,
+        status: 404,
+        error: 'Paciente no encontrado en su territorio.',
+      };
+    }
+    if (!adminAll && !inScope(user, hit as { terr?: unknown })) {
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
+    const keys = [
+      String(hit.id || ''),
+      hit.accountId ? String(hit.accountId) : '',
+      hit.code ? String(hit.code) : '',
+      patientId,
+    ].filter(Boolean);
+    return { ok: true, keys: Array.from(new Set(keys)) };
+  }
+
+  if (patientName) {
+    const rx = {
+      $regex: `^${patientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+      $options: 'i',
+    };
+    const [fromPatients, fromPeople] = await Promise.all([
+      db
+        .collection('patients')
+        .find({ ...terrQ, name: rx })
+        .project({ id: 1, accountId: 1, code: 1, terr: 1 })
+        .limit(20)
+        .toArray(),
+      db
+        .collection('people')
+        .find({ ...terrQ, name: rx })
+        .project({ id: 1, accountId: 1, code: 1, terr: 1 })
+        .limit(20)
+        .toArray(),
+    ]);
+    const keys = new Set<string>();
+    for (const hit of [...fromPatients, ...fromPeople]) {
+      if (!adminAll && !inScope(user, hit as { terr?: unknown })) continue;
+      if (hit.id) keys.add(String(hit.id));
+      if (hit.accountId) keys.add(String(hit.accountId));
+      if (hit.code) keys.add(String(hit.code));
+    }
+    if (!keys.size) {
+      return {
+        ok: false,
+        status: 404,
+        error: 'Paciente no encontrado en su territorio.',
+      };
+    }
+    return { ok: true, keys: Array.from(keys) };
+  }
+
+  return {
+    ok: false,
+    status: 400,
+    error: 'Indique patientId o patientName.',
+  };
+}
+
 @Injectable()
 export class TeoConversationsService {
   constructor(
@@ -91,7 +202,7 @@ export class TeoConversationsService {
     const patientId = String(data.patientId || '').trim();
     const patientName = String(data.patientName || '').trim();
 
-    // Paciente: solo las suyas
+    // Paciente: solo las suyas. Experto/clínico: solo su territorio (6.11 / 5.11 / 6.22).
     let filter: Record<string, unknown> = {};
     if (auth.user.roleId === 'paciente') {
       const pid = String(
@@ -100,26 +211,34 @@ export class TeoConversationsService {
       filter = {
         $or: [{ accountId: auth.user.id }, { patientId: pid }],
       };
-    } else if (patientId) {
+    } else {
+      const scoped = await resolveScopedPatient(db, auth.user, {
+        patientId,
+        patientName,
+      });
+      if (!scoped.ok) {
+        return { ok: false, status: scoped.status, error: scoped.error };
+      }
       filter = {
         $or: [
-          { patientId },
-          { accountId: patientId },
+          { patientId: { $in: scoped.keys } },
+          { accountId: { $in: scoped.keys } },
         ],
       };
-    } else if (patientName) {
-      filter = {
-        patientName: {
-          $regex: `^${patientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-          $options: 'i',
-        },
-      };
-    } else {
-      return {
-        ok: false,
-        status: 400,
-        error: 'Indique patientId o patientName.',
-      };
+      // Si pidieron por nombre, también acotar patientName (mismo territorio ya validado).
+      if (patientName && !patientId) {
+        filter = {
+          $and: [
+            filter,
+            {
+              patientName: {
+                $regex: `^${patientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                $options: 'i',
+              },
+            },
+          ],
+        };
+      }
     }
 
     const [a, b] = await Promise.all([
@@ -196,6 +315,16 @@ export class TeoConversationsService {
             (auth.user as { name?: string }).name ||
             'Paciente',
         );
+      }
+    } else if (auth.user.roleId === 'clinico' || auth.user.roleId === 'experto') {
+      // Misma regla de territorio al escribir (no solo al listar).
+      const dbScope = await this.mongo.db();
+      const scoped = await resolveScopedPatient(dbScope, auth.user, {
+        patientId: patientId || accountId,
+        patientName: patientId || accountId ? undefined : patientName,
+      });
+      if (!scoped.ok) {
+        return { ok: false, status: scoped.status, error: scoped.error };
       }
     }
 

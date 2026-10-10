@@ -298,7 +298,6 @@ export async function buildStaffContext(
         id: 1,
         name: 1,
         terr: 1,
-        phone: 1,
         active: 1,
         target: 1,
         today: 1,
@@ -416,7 +415,6 @@ export async function buildStaffContext(
       )
       .project({
         id: 1,
-        name: 1,
         code: 1,
         status: 1,
         place: 1,
@@ -541,11 +539,19 @@ export async function buildStaffContext(
     parts.push('Cola de trabajo (por estado): ' + fmtGroup(workByStatus));
   }
   if (workItems.length) {
+    // 6.36: sin nombre; usar código de persona.
+    const safeWork = workItems.map((w) => {
+      const row = { ...(w as Record<string, unknown>) };
+      delete row.name;
+      delete row.phone;
+      if (!row.code && row.id) row.code = row.id;
+      return row;
+    });
     parts.push(
       roleId === 'experto'
         ? 'Su cola de visitas / pendientes:'
         : 'Cola de campo (muestra de ítems):',
-      JSON.stringify(workItems),
+      JSON.stringify(safeWork),
     );
   }
   if (assetsByKind.length) {
@@ -658,7 +664,6 @@ export async function buildStaffContext(
       .project({
         id: 1,
         code: 1,
-        name: 1,
         age: 1,
         place: 1,
         terr: 1,
@@ -668,8 +673,6 @@ export async function buildStaffContext(
         expertId: 1,
         clin: 1,
         pendingEval: 1,
-        phone: 1,
-        email: 1,
         week: 1,
         weeks: 1,
         activeAt: 1,
@@ -684,11 +687,34 @@ export async function buildStaffContext(
       .toArray()
       .catch(() => []);
     if (peRows.length) {
+      // 6.36: sin nombre/teléfono/correo; identificar por código.
+      const safePeople = peRows.map((r) => ({
+        id: r.id,
+        code: r.code || '',
+        age: r.age,
+        place: r.place,
+        terr: r.terr,
+        profile: r.profile,
+        status: r.status,
+        expert: r.expert,
+        expertId: r.expertId,
+        clin: r.clin,
+        pendingEval: r.pendingEval,
+        week: r.week,
+        weeks: r.weeks,
+        activeAt: r.activeAt,
+        inactiveLock: r.inactiveLock,
+        crisisLock: r.crisisLock,
+        evalPhq: r.evalPhq,
+        evalDig: r.evalDig,
+        evalAt: r.evalAt,
+        previousProfile: r.previousProfile,
+      }));
       parts.push(
         nameHint
           ? 'Personas captadas que coinciden:'
           : 'Listado de personas (muestra):',
-        JSON.stringify(peRows),
+        JSON.stringify(safePeople),
       );
     }
   }

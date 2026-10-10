@@ -18,6 +18,35 @@ export class SessionService {
     await this.store.updateOne('accounts', { id: accountId }, { $set: { logoutAt: Date.now() } });
   }
 
+  /**
+   * Registro de acceso (6.19): login/401/403, sin claves ni datos clínicos.
+   * Escribe en la colección `access_log`.
+   */
+  async logAccess(entry: {
+    action: string;
+    accountId?: string | null;
+    email?: string | null;
+    status?: number | null;
+    path?: string | null;
+  }) {
+    const id = `al-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await this.store.upsert('access_log', { id }, {
+        id,
+        action: String(entry.action || '').slice(0, 64),
+        accountId: entry.accountId ? String(entry.accountId).slice(0, 80) : null,
+        email: entry.email
+          ? String(entry.email).toLowerCase().slice(0, 120)
+          : null,
+        status: entry.status ?? null,
+        path: entry.path ? String(entry.path).slice(0, 200) : null,
+        at: Date.now(),
+      });
+    } catch {
+      /* no bloquear la petición */
+    }
+  }
+
   async loadUser(accountId: string, token?: string | null): Promise<SessionUser | null> {
     const account = await this.store.findOne('accounts', {
       id: accountId,

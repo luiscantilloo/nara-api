@@ -74,19 +74,36 @@ export class LoginService {
     // SPEC-03: contador por correo (exista o no la cuenta) en login_attempts.
     const intento = await this.store.findOne('login_attempts', { key: email });
     if (intento && Number(intento.lockUntil || 0) > now) {
+      await this.sessions.logAccess({
+        action: 'login_locked',
+        email,
+        status: 429,
+      });
       return { ok: false, status: 429, error: LOCK_ERROR };
     }
-    const fallo = async () => {
+    const fallo = async (accountId?: string) => {
       const dentro = intento && now - Number(intento.firstAt || 0) < LOCK_WINDOW_MS;
       const fails = dentro ? Number(intento!.fails || 0) + 1 : 1;
+      const lockUntil = fails >= LOCK_MAX_FAILS ? now + LOCK_MS : 0;
       await this.store.upsert('login_attempts', { key: email }, {
         key: email,
         fails,
         firstAt: dentro ? Number(intento!.firstAt) : now,
-        lockUntil: fails >= LOCK_MAX_FAILS ? now + LOCK_MS : 0,
+        lockUntil,
         at: new Date(now),
       });
-      return { ok: false, status: 401, error: LOGIN_ERROR };
+      await this.sessions.logAccess({
+        action: lockUntil ? 'login_locked' : 'login_fail',
+        email,
+        status: lockUntil ? 429 : 401,
+        accountId,
+      });
+      await this.maybeAlertLoginFails(now);
+      return {
+        ok: false,
+        status: lockUntil ? 429 : 401,
+        error: lockUntil ? LOCK_ERROR : LOGIN_ERROR,
+      };
     };
 
     const account = await this.store.findOne('accounts', { email });
@@ -94,27 +111,32 @@ export class LoginService {
       await verifyPassword(password, HASH_FICTICIO);
       return fallo();
     }
-    // SPEC-01: si hay clave temporal vigente, solo se acepta esa.
+    // SPEC-01: si hay clave temporal, verificarla (aunque esté vencida) y contar fallo
+    // con el mensaje genérico — no adelantar «venció» antes de comprobar la clave (6.17).
     const temp = account.tempPassword as { hash?: string; expiresAt?: number } | undefined;
     let ok: boolean;
     if (temp?.hash) {
-      if (Number(temp.expiresAt || 0) < now) {
-        return {
-          ok: false,
-          status: 401,
-          error: 'La clave temporal venció. Pida una nueva al administrador.',
-        };
-      }
       ok = await verifyPassword(password, String(temp.hash));
+      if (ok && Number(temp.expiresAt || 0) < now) {
+        // Clave correcta pero vencida: fallo genérico (no filtrar si la clave era la temporal).
+        return fallo(String(account.id));
+      }
     } else {
       ok = await verifyPassword(password, String(account.passwordHash || ''));
     }
-    if (!ok) return fallo();
+    if (!ok) return fallo(String(account.id));
     if (intento) await this.store.updateOne('login_attempts', { key: email }, { $set: { fails: 0, lockUntil: 0 } });
 
     const user = await this.sessions.loadUser(String(account.id));
-    if (!user)
+    if (!user) {
+      await this.sessions.logAccess({
+        action: 'login_fail',
+        email,
+        status: 401,
+        accountId: String(account.id),
+      });
       return { ok: false, status: 401, error: 'Cuenta no disponible.' };
+    }
     await this.store.updateOne(
       'accounts',
       { id: account.id },
@@ -123,7 +145,58 @@ export class LoginService {
     // T-03: si cerró sesión en este mismo segundo, el token nuevo se emite un segundo después para no quedar revocado.
     const extra = account.logoutAt && Math.floor(now / 1000) * 1000 <= Number(account.logoutAt) ? 1 : 0;
     const token = signSessionToken(user.id, SESSION_MAX_AGE_SEC + extra);
+    await this.sessions.logAccess({
+      action: 'login_ok',
+      email,
+      status: 200,
+      accountId: String(account.id),
+    });
     return { ok: true, status: 200, user, token };
+  }
+
+  /** Alerta operativa si hay ≥20 login_fail/login_locked en 10 minutos. */
+  private async maybeAlertLoginFails(now: number) {
+    try {
+      const since = now - 10 * 60 * 1000;
+      const n = await this.store.count('access_log', {
+        action: { $in: ['login_fail', 'login_locked'] },
+        at: { $gte: since },
+      });
+      if (n < 20) return;
+      const alertId = `a-login-fails-${Math.floor(now / (10 * 60 * 1000))}`;
+      const existing = await this.store.findOne('program_settings', {
+        key: 'app_state',
+        'alerts.id': alertId,
+      });
+      if (existing) return;
+      await this.store.updateOne(
+        'program_settings',
+        { key: 'app_state' },
+        {
+          $push: {
+            alerts: {
+              $each: [
+                {
+                  id: alertId,
+                  at: now,
+                  status: 'open',
+                  sev: 'alta',
+                  pid: 'system',
+                  name: 'Seguridad',
+                  what: `20 o más intentos de login fallidos en 10 minutos (${n} registrados).`,
+                  source: 'access_log',
+                  term: 'login_bruteforce',
+                },
+              ],
+              $position: 0,
+            },
+          },
+          $set: { updatedAt: new Date(now) },
+        },
+      );
+    } catch {
+      /* ignore */
+    }
   }
 
   /** T-03: cerrar sesión revoca en el servidor los tokens emitidos hasta ahora. */
