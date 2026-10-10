@@ -10,6 +10,9 @@ export type PolicyUser = { id: string; roleId: string; terr?: string | null; pat
 
 /** Apartados con un registro por paciente (se filtran al territorio para experto y clínico). */
 const POR_PACIENTE = ['alerts', 'crisisLog', 'closedToday', 'notes', 'referrals', 'consents', 'visits', 'revisits', 'falsePositives', 'pendingSync', 'pathAdjust', 'rejected'];
+/** Apartados guardados como mapa { idPaciente: [...] } (se filtran por clave al territorio). */
+const MAPA_POR_PACIENTE = ['notes', 'pathAdjust', 'consents'];
+const esMapa = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Registros internos: solo el admin los lee. */
 const SOLO_ADMIN_LEE = ['accessLog', 'agentLog', 'aiLog', 'activity'];
 /** Configuración que el experto no escribe. */
@@ -42,6 +45,9 @@ export function filtrarLectura(slices: Slices, user: PolicyUser, ids: Set<string
     for (const k of PACIENTE_LEE) if (k in slices) out[k] = slices[k];
     const propio = (k: string) => (Array.isArray(slices[k]) ? (slices[k] as Row[]).filter((x) => user.patientId && pidDe(x) === user.patientId) : []);
     out.alerts = propio('alerts'); out.crisisLog = propio('crisisLog'); out.closedToday = propio('closedToday');
+    // P-01: el paciente ve solo su propio consentimiento (para aceptarlo o retirarlo desde su app).
+    const cons = slices.consents;
+    out.consents = esMapa(cons) && user.patientId && cons[user.patientId] !== undefined ? { [user.patientId]: cons[user.patientId] } : {};
     const n = slices.notifs as Record<string, unknown> | undefined;
     out.notifs = n && n[user.id] ? { [user.id]: n[user.id] } : {};
     return out;
@@ -49,6 +55,11 @@ export function filtrarLectura(slices: Slices, user: PolicyUser, ids: Set<string
   // experto y clínico
   for (const [k, v] of Object.entries(slices)) {
     if (SOLO_ADMIN_LEE.includes(k)) continue;
+    if (MAPA_POR_PACIENTE.includes(k) && esMapa(v) && ids) {
+      // Reporte TRL 2026-10-10: las notas y ajustes de ruta de otros territorios no se leen.
+      out[k] = Object.fromEntries(Object.entries(v).filter(([pid]) => ids.has(pid)));
+      continue;
+    }
     out[k] = POR_PACIENTE.includes(k) && Array.isArray(v) && ids ? (v as Row[]).filter((x) => enAlcance(x, ids)) : v;
   }
   return out;
@@ -68,11 +79,24 @@ export function restringirEscritura(incoming: Slices, existing: Slices | null, u
     for (const k of ['alerts', 'crisisLog', 'closedToday']) { const v = mios(k); if (v && v.length) out[k] = v; }
     const n = incoming.notifs as Record<string, unknown> | undefined;
     if (n && n[user.id] !== undefined) out.notifs = { ...((existing?.notifs as Record<string, unknown>) || {}), [user.id]: n[user.id] };
+    // P-01: solo su propia entrada de consentimiento; las de otras personas se conservan tal cual.
+    const c = incoming.consents;
+    if (esMapa(c) && user.patientId && c[user.patientId] !== undefined) {
+      out.consents = { ...(esMapa(existing?.consents) ? (existing!.consents as Record<string, unknown>) : {}), [user.patientId]: c[user.patientId] };
+    }
     return out;
   }
   const prohibidos = r === 'experto' ? EXPERTO_NO_ESCRIBE : r === 'clinico' ? CLINICO_NO_ESCRIBE : Object.keys(incoming);
   for (const [k, v] of Object.entries(incoming)) {
     if (prohibidos.includes(k) || SOLO_ADMIN_LEE.includes(k)) continue;
+    if (MAPA_POR_PACIENTE.includes(k) && esMapa(v) && ids) {
+      // Conserva las claves de otros territorios y solo acepta las del propio.
+      const previo = esMapa(existing?.[k]) ? (existing![k] as Record<string, unknown>) : {};
+      const ajenos = Object.fromEntries(Object.entries(previo).filter(([pid]) => !ids.has(pid)));
+      const propios = Object.fromEntries(Object.entries(v).filter(([pid]) => ids.has(pid)));
+      out[k] = { ...ajenos, ...propios };
+      continue;
+    }
     if (POR_PACIENTE.includes(k) && Array.isArray(v) && ids) {
       const ajenos = Array.isArray(existing?.[k]) ? (existing![k] as Row[]).filter((x) => !enAlcance(x, ids)) : [];
       out[k] = [...ajenos, ...(v as Row[]).filter((x) => enAlcance(x, ids))];

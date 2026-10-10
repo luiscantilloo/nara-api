@@ -66,3 +66,23 @@ test('H-016: la sesión dura 12 h y el token vence', () => {
   assert.equal(verifySessionToken(signSessionToken('u1')), 'u1');
   assert.equal(verifySessionToken(signSessionToken('u1', -1)), null);
 });
+
+import { filtrarLectura, restringirEscritura } from '../apps/ops/src/app-state/app-state.policy.ts';
+
+test('notas y ajustes de ruta (mapa por paciente): solo el territorio propio se lee y se escribe', () => {
+  const clinico = { id: 'c1', roleId: 'clinico', terr: 'Bucaramanga' };
+  const ids = new Set(['sm-1']);
+  const existente = { notes: { 'sm-1': [{ text: 'propia' }], 'sm-9': [{ text: 'ajena' }] } };
+  const leido = filtrarLectura(existente, clinico, ids);
+  assert.deepEqual(Object.keys(leido.notes as object), ['sm-1']);
+  const escrito = restringirEscritura({ notes: { 'sm-1': [{ text: 'nueva' }], 'sm-9': [] } }, existente, clinico, ids);
+  assert.deepEqual(escrito.notes, { 'sm-9': [{ text: 'ajena' }], 'sm-1': [{ text: 'nueva' }] });
+});
+
+test('P-01: el paciente lee y escribe solo su propio consentimiento', () => {
+  const paciente = { id: 'p1', roleId: 'paciente', patientId: 'sm-1' };
+  const existente = { consents: { 'sm-1': { datos: true }, 'sm-9': { datos: true } } };
+  assert.deepEqual(filtrarLectura(existente, paciente, null).consents, { 'sm-1': { datos: true } });
+  const escrito = restringirEscritura({ consents: { 'sm-1': { datos: true, appAt: 1 }, 'sm-9': { datos: false } } }, existente, paciente, null);
+  assert.deepEqual(escrito.consents, { 'sm-1': { datos: true, appAt: 1 }, 'sm-9': { datos: true } });
+});

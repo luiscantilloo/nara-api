@@ -34,7 +34,8 @@ const idsBuc = new Set(['sm-1']);
 
 test('app-state lectura: paciente solo lo suyo, observador sin datos de personas', () => {
   const p = filtrarLectura(slices, paciente, null);
-  assert.ok(!('notes' in p) && !('consents' in p) && !('accessLog' in p));
+  assert.ok(!('notes' in p) && !('accessLog' in p));
+  assert.deepEqual(p.consents, {}, 'P-01: ningún consentimiento ajeno');
   assert.deepEqual(p.alerts, [{ id: 'a-sm-1', pid: 'sm-1' }]);
   assert.deepEqual(p.notifs, { p1: ['hola'] });
   const o = filtrarLectura(slices, observador, null);
