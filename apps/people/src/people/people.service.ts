@@ -40,7 +40,16 @@ export class PeopleService {
     if (data.q) client.name = { $regex: data.q, $options: 'i' };
     // SPEC-02 FR-02.1: el servidor aplica el territorio.
     const scope = terrFilter(auth.user);
-    if (!scope) return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    if (!scope) {
+      void this.sessions.logAccess({
+        action: 'http_403',
+        status: 403,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/people',
+      });
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
     const filter = andScope(andScope(scope, client), { archived: { $ne: true } });
     const limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
     const skip = Math.max(Number(data.skip) || 0, 0);
@@ -248,6 +257,13 @@ export class PeopleService {
       ((existing && !inScope(auth.user, existing)) ||
         !inScope(auth.user, { terr }))
     ) {
+      void this.sessions.logAccess({
+        action: 'http_403',
+        status: 403,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/people',
+      });
       return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
     }
     const pre =

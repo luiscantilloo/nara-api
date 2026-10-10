@@ -8,8 +8,19 @@ export class LoginController {
   constructor(private readonly loginService: LoginService) {}
 
   @MessagePattern(Patterns.AUTH_LOGIN)
-  login(@Payload() data: { email: string; password: string }) {
-    return this.loginService.login(data.email, data.password);
+  login(
+    @Payload()
+    data: {
+      email: string;
+      password: string;
+      ip?: string | null;
+      path?: string | null;
+    },
+  ) {
+    return this.loginService.login(data.email, data.password, {
+      ip: data.ip,
+      path: data.path,
+    });
   }
 
   @MessagePattern(Patterns.AUTH_LOGOUT)

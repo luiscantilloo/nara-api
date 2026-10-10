@@ -56,7 +56,11 @@ export class LoginService {
     private readonly sessions: SessionService,
   ) {}
 
-  async login(emailRaw: unknown, password: unknown) {
+  async login(
+    emailRaw: unknown,
+    password: unknown,
+    meta?: { ip?: string | null; path?: string | null },
+  ) {
     if (typeof emailRaw !== 'string' || typeof password !== 'string') {
       return { ok: false, status: 400, error: 'Correo y contraseña deben ser texto.' };
     }
@@ -71,6 +75,10 @@ export class LoginService {
       };
     }
     const now = Date.now();
+    const accessMeta = {
+      ip: meta?.ip ?? null,
+      path: meta?.path || '/auth/login',
+    };
     // SPEC-03: contador por correo (exista o no la cuenta) en login_attempts.
     const intento = await this.store.findOne('login_attempts', { key: email });
     if (intento && Number(intento.lockUntil || 0) > now) {
@@ -78,6 +86,7 @@ export class LoginService {
         action: 'login_locked',
         email,
         status: 429,
+        ...accessMeta,
       });
       return { ok: false, status: 429, error: LOCK_ERROR };
     }
@@ -97,6 +106,7 @@ export class LoginService {
         email,
         status: lockUntil ? 429 : 401,
         accountId,
+        ...accessMeta,
       });
       await this.maybeAlertLoginFails(now);
       return {
@@ -134,6 +144,7 @@ export class LoginService {
         email,
         status: 401,
         accountId: String(account.id),
+        ...accessMeta,
       });
       return { ok: false, status: 401, error: 'Cuenta no disponible.' };
     }
@@ -150,11 +161,15 @@ export class LoginService {
       email,
       status: 200,
       accountId: String(account.id),
+      ...accessMeta,
     });
     return { ok: true, status: 200, user, token };
   }
 
-  /** Alerta operativa si hay ≥20 login_fail/login_locked en 10 minutos. */
+  /**
+   * Alerta si hay ≥20 login_fail/login_locked en 10 min.
+   * Sale por webhook/correo (ACCESS_ALERT_WEBHOOK / ACCESS_ALERT_EMAIL), no a app_state.alerts (TEO).
+   */
   private async maybeAlertLoginFails(now: number) {
     try {
       const since = now - 10 * 60 * 1000;
@@ -163,37 +178,36 @@ export class LoginService {
         at: { $gte: since },
       });
       if (n < 20) return;
-      const alertId = `a-login-fails-${Math.floor(now / (10 * 60 * 1000))}`;
-      const existing = await this.store.findOne('program_settings', {
-        key: 'app_state',
-        'alerts.id': alertId,
+      const bucket = Math.floor(now / (10 * 60 * 1000));
+      const dedupeId = `login-fails-alert-${bucket}`;
+      const already = await this.store.findOne('access_log', { id: dedupeId });
+      if (already) return;
+      await this.store.upsert('access_log', { id: dedupeId }, {
+        id: dedupeId,
+        action: 'login_bruteforce_alert',
+        status: 429,
+        at: now,
+        count: n,
       });
-      if (existing) return;
-      await this.store.updateOne(
-        'program_settings',
-        { key: 'app_state' },
-        {
-          $push: {
-            alerts: {
-              $each: [
-                {
-                  id: alertId,
-                  at: now,
-                  status: 'open',
-                  sev: 'alta',
-                  pid: 'system',
-                  name: 'Seguridad',
-                  what: `20 o más intentos de login fallidos en 10 minutos (${n} registrados).`,
-                  source: 'access_log',
-                  term: 'login_bruteforce',
-                },
-              ],
-              $position: 0,
-            },
-          },
-          $set: { updatedAt: new Date(now) },
-        },
-      );
+      const text = `NARA seguridad: ${n} intentos de login fallidos en 10 minutos.`;
+      console.warn(JSON.stringify({ kind: 'security_alert', event: 'login_bruteforce', n, at: now }));
+      const webhook = String(process.env.ACCESS_ALERT_WEBHOOK || '').trim();
+      if (webhook) {
+        await fetch(webhook, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text, n, at: now, source: 'nara-api' }),
+        }).catch(() => undefined);
+      }
+      const mailTo = String(process.env.ACCESS_ALERT_EMAIL || '').trim();
+      const mailHook = String(process.env.ACCESS_ALERT_EMAIL_WEBHOOK || '').trim();
+      if (mailTo && mailHook) {
+        await fetch(mailHook, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ to: mailTo, subject: 'NARA: muchos fallos de login', text }),
+        }).catch(() => undefined);
+      }
     } catch {
       /* ignore */
     }

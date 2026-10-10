@@ -115,11 +115,34 @@ export async function buildStaffContext(
   const scope = await resolveScope(db, roleId, userId);
   const scopeFilter = scopePatientFilter(scope, roleId);
   const scoped = roleId === 'experto' || roleId === 'clinico'; // con territorio (ver scopePatientFilter)
-  const terrIds = scoped
-    ? (await db.collection('people').find(scopeFilter, { projection: { id: 1 } }).toArray()).map((p) => p.id)
-    : [];
+  const terrIdSet = new Set<string>();
+  if (scoped) {
+    for (const col of ['people', 'patients'] as const) {
+      const rows = await db
+        .collection(col)
+        .find(scopeFilter, { projection: { id: 1, code: 1, accountId: 1 } })
+        .toArray()
+        .catch(() => []);
+      for (const r of rows) {
+        if (r.id) terrIdSet.add(String(r.id));
+        if (r.code) terrIdSet.add(String(r.code));
+        if (r.accountId) terrIdSet.add(String(r.accountId));
+      }
+    }
+  }
+  const terrIds = [...terrIdSet];
   const terrOnly = scoped ? scopeFilter : {};
-  const personIn = scoped ? { $or: [{ personId: { $in: terrIds } }, { person: { $in: terrIds } }, { pid: { $in: terrIds } }] } : {};
+  const personIn = scoped
+    ? {
+        $or: [
+          { personId: { $in: terrIds } },
+          { person: { $in: terrIds } },
+          { pid: { $in: terrIds } },
+          { id: { $in: terrIds } },
+          { code: { $in: terrIds } },
+        ],
+      }
+    : {};
 
   const parts: string[] = [
     APP_OVERVIEW,
@@ -156,10 +179,29 @@ export async function buildStaffContext(
     db.collection('people').countDocuments(scopeFilter),
     db.collection('experts').countDocuments(),
     db.collection('territories').countDocuments(),
-    db.collection('alerts').countDocuments().catch(() => 0),
-    db.collection('flags').countDocuments().catch(() => 0),
-    db.collection('assets').countDocuments().catch(() => 0),
-    db.collection('worklist_items').countDocuments().catch(() => 0),
+    db.collection('alerts').countDocuments(personIn).catch(() => 0),
+    db
+      .collection('flags')
+      .countDocuments(scoped ? personIn : {})
+      .catch(() => 0),
+    db.collection('assets').countDocuments(terrOnly).catch(() => 0),
+    db
+      .collection('worklist_items')
+      .countDocuments(
+        scoped && roleId === 'clinico'
+          ? personIn
+          : roleId === 'experto' && scope.expertKeys.length
+            ? {
+                $or: [
+                  { expertId: { $in: scope.expertKeys } },
+                  { expert: { $in: scope.expertKeys } },
+                  { ownerId: { $in: scope.expertKeys } },
+                  { owner: { $in: scope.expertKeys } },
+                ],
+              }
+            : {},
+      )
+      .catch(() => 0),
   ]);
 
   parts.push(
@@ -344,7 +386,9 @@ export async function buildStaffContext(
       .find(personIn)
       .project({
         id: 1,
-        name: 1,
+        code: 1,
+        pid: 1,
+        personId: 1,
         sev: 1,
         status: 1,
         what: 1,
@@ -366,22 +410,29 @@ export async function buildStaffContext(
       .find(
         scoped && roleId === 'clinico'
           ? personIn
-          : roleId === 'experto' && scope.expertKeys.length
+          : scoped && roleId === 'experto' && scope.expertKeys.length
           ? {
-              $or: [
-                { expertId: { $in: scope.expertKeys } },
-                { expert: { $in: scope.expertKeys } },
-                { expertName: { $in: scope.expertKeys } },
-                { status: 'pending' },
+              // 6.11: pending solo del territorio (no de todo el programa).
+              $and: [
+                personIn,
+                {
+                  $or: [
+                    { expertId: { $in: scope.expertKeys } },
+                    { expert: { $in: scope.expertKeys } },
+                    { expertName: { $in: scope.expertKeys } },
+                    { status: 'pending' },
+                  ],
+                },
               ],
             }
-          : { status: { $in: ['pending', 'pendiente', 'open', 'abierta'] } },
+          : scoped && roleId === 'experto'
+            ? personIn
+            : { status: { $in: ['pending', 'pendiente', 'open', 'abierta'] } },
       )
       .project({
         id: 1,
-        name: 1,
+        code: 1,
         person: 1,
-        personName: 1,
         expert: 1,
         expertName: 1,
         expertId: 1,
@@ -448,7 +499,6 @@ export async function buildStaffContext(
         expertName: 1,
         assignedTo: 1,
         person: 1,
-        personName: 1,
       })
       .limit(80)
       .toArray()
@@ -530,9 +580,20 @@ export async function buildStaffContext(
     );
   }
   if (pendingFlags.length) {
+    const safeFlags = pendingFlags.map((f) => {
+      const row = { ...(f as Record<string, unknown>) };
+      delete row.name;
+      delete row.personName;
+      delete row.phone;
+      delete row.email;
+      if (!row.code && (row.person || row.id)) {
+        row.code = String(row.person || row.id);
+      }
+      return row;
+    });
     parts.push(
       'Visitas / banderas de calidad a revisar:',
-      JSON.stringify(pendingFlags),
+      JSON.stringify(safeFlags),
     );
   }
   if (workByStatus.length) {
@@ -558,13 +619,34 @@ export async function buildStaffContext(
     parts.push('Activos por tipo/estado:', JSON.stringify(assetsByKind));
   }
   if (assetsDetail.length) {
+    const safeAssets = assetsDetail.map((a) => {
+      const row = { ...(a as Record<string, unknown>) };
+      delete row.personName;
+      delete row.phone;
+      delete row.email;
+      if (!row.code && row.person) row.code = String(row.person);
+      return row;
+    });
     parts.push(
       'Activos (manillas/tabletas) con asignación:',
-      JSON.stringify(assetsDetail),
+      JSON.stringify(safeAssets),
     );
   }
   if (alerts.length) {
-    parts.push('Alertas recientes (colección):', JSON.stringify(alerts));
+    const safeAlerts = alerts.map((a) => {
+      const row = { ...(a as Record<string, unknown>) };
+      delete row.name;
+      delete row.phone;
+      delete row.email;
+      if (!row.code) {
+        row.code = String(row.pid || row.personId || row.id || '');
+      }
+      return row;
+    });
+    parts.push(
+      'Alertas recientes (colección):',
+      JSON.stringify(safeAlerts),
+    );
   }
 
   // Estado operativo completo (slices)
@@ -575,6 +657,7 @@ export async function buildStaffContext(
         roleId,
         nameHint: nameHint && nameHint.length > 2 ? nameHint : null,
         expertKeys: scope.expertKeys,
+        terrIds: scoped ? terrIdSet : null,
       },
     ),
   );
@@ -719,17 +802,14 @@ export async function buildStaffContext(
     }
   }
 
-  if (
-    /usuario|cuenta|admin|experto|cl[ií]nico|rol|permiso|observador/i.test(q) ||
-    roleId === 'admin'
-  ) {
+  // 6.36: cuentas solo admin y sin correo.
+  if (roleId === 'admin') {
     const accounts = await db
       .collection('accounts')
       .find({})
       .project({
         id: 1,
         name: 1,
-        email: 1,
         role: 1,
         roleId: 1,
         status: 1,
@@ -742,7 +822,7 @@ export async function buildStaffContext(
       .catch(() => []);
     if (accounts.length) {
       parts.push(
-        'Cuentas del programa (sin contraseñas):',
+        'Cuentas del programa (sin contraseñas ni correo):',
         JSON.stringify(accounts),
       );
     }

@@ -9,6 +9,24 @@ export function readToken(req: Request): string | null {
   return null;
 }
 
+/** IP (x-forwarded-for) y ruta para access_log (6.19). */
+export function requestMeta(req: Request): { ip: string | null; path: string } {
+  const xf = req.headers['x-forwarded-for'];
+  const fromHeader =
+    typeof xf === 'string'
+      ? xf.split(',')[0]
+      : Array.isArray(xf)
+        ? xf[0]
+        : '';
+  const ip = String(fromHeader || req.socket?.remoteAddress || '')
+    .trim()
+    .slice(0, 80);
+  return {
+    ip: ip || null,
+    path: String(req.originalUrl || req.url || '').slice(0, 200),
+  };
+}
+
 export function sendResult(res: Response, result: Record<string, unknown>) {
   const status = Number(result.status || (result.ok ? 200 : 500));
   const { status: _s, token, ...body } = result;

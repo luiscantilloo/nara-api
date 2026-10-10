@@ -121,7 +121,8 @@ Temas permitidos: su ruta en NARA y sus servicios, su ánimo, su sueño, las té
 Solo si pregunta algo que no tiene que ver con NARA, diga con amabilidad que solo puede ayudar con el programa NARA.
 Use la ficha del paciente de la base; no invente datos clínicos.`;
 
-      const prompt = `Hablas con ${name}, ${age} años, de ${place}. Perfil ${profile}.
+      // 6.36: solo el primer nombre en el prompt (no nombre completo).
+      const prompt = `Hablas con ${fname}, ${age} años, de ${place}. Perfil ${profile}.
 Ficha (Mongo): ${patientSnap}
 Servicios de su ruta: ${ruta.length ? ruta.join(', ') : '(la ruta todavía no está activa: la activa el clínico después de aprobar la evaluación)'}
 Puedes ofrecer la respiración 4-6, anotar un tema para la sesión o un recurso de Mi ruta.

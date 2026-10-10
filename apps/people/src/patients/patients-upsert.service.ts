@@ -154,6 +154,13 @@ export class PatientsUpsertService {
       ((existing && !inScope(auth.user, existing as { terr?: unknown })) ||
         !inScope(auth.user, { terr }))
     ) {
+      void this.sessions.logAccess({
+        action: 'http_403',
+        status: 403,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/patients',
+      });
       return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
     }
     let expert = String(
