@@ -187,4 +187,14 @@ export class OpsProxyController {
   ) {
     return this.send(req, res, 'ops', Patterns.APP_STATE_PUT, { body });
   }
+
+  // H-002 (SPEC-002 FR-002): alerta inmediata (pregunta 9 del PHQ-9, crisis del paciente).
+  @Post('alerts')
+  alertsPost(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.send(req, res, 'ops', Patterns.ALERTS_CREATE, { body });
+  }
 }

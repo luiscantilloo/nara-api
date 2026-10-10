@@ -11,7 +11,8 @@ import {
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
-import { filtrarLectura, idsDelTerritorio, restringirEscritura } from './app-state.policy';
+import { filtrarLectura, idsDelTerritorio, restringirEscritura, type Descarte } from './app-state.policy';
+import { guardarAlerta } from './alerts';
 
 @Injectable()
 export class AppStateService {
@@ -65,11 +66,13 @@ export class AppStateService {
     const ids = ['experto', 'clinico'].includes(auth.user.roleId)
       ? await idsDelTerritorio(db, String(auth.user.terr || ''))
       : null;
+    const descartes: Descarte[] = [];
     const slices = restringirEscritura(
       pickAppStateSlices(body.slices as Record<string, unknown>),
       existing as Record<string, unknown> | null,
       auth.user,
       ids,
+      descartes,
     );
     if (!Object.keys(slices).length) {
       // H-011: si nada de lo enviado le está permitido a este rol, se rechaza en vez de fingir que se guardó.
@@ -140,6 +143,21 @@ export class AppStateService {
           { upsert: true },
         );
     }
+    // H-002 (SPEC-002 FR-003): si se descartó algo, se dice (207) en vez de responder 200.
+    if (descartes.length) {
+      return { ok: true, status: 207, saved: Object.keys(slices).length, descartados: descartes.slice(0, 200) };
+    }
     return { ok: true, status: 200, saved: Object.keys(slices).length };
+  }
+
+  /** H-002 (SPEC-002 FR-002): `POST /api/alerts` guarda la alerta al momento (201). */
+  async crearAlerta(token: string | null, body: Record<string, unknown>) {
+    const auth = await requireRoles(this.sessions, token, ['admin', 'experto', 'clinico', 'paciente']);
+    if ('error' in auth) return auth.error;
+    const db = await this.mongo.db();
+    const ids = ['experto', 'clinico'].includes(auth.user.roleId)
+      ? await idsDelTerritorio(db, String(auth.user.terr || ''))
+      : null;
+    return guardarAlerta(db, body, auth.user, ids);
   }
 }

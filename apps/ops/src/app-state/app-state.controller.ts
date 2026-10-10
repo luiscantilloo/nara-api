@@ -16,4 +16,9 @@ export class AppStateController {
   put(@Payload() d: { token: string | null; body: Record<string, unknown> }) {
     return this.appState.put(d.token, d.body || {});
   }
+
+  @MessagePattern(Patterns.ALERTS_CREATE)
+  crearAlerta(@Payload() d: { token: string | null; body: Record<string, unknown> }) {
+    return this.appState.crearAlerta(d.token, d.body || {});
+  }
 }

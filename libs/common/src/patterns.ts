@@ -37,6 +37,7 @@ export const Patterns = {
   ASSETS_TABLET: 'ops.assets.tablet',
   APP_STATE_GET: 'ops.appState.get',
   APP_STATE_PUT: 'ops.appState.put',
+  ALERTS_CREATE: 'ops.alerts.create',
   HEALTH_DB: 'ops.health.db',
 
   TEO_ASK: 'ai.teo.ask',
