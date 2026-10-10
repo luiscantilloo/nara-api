@@ -2,7 +2,7 @@ import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Patterns } from '@nara/common';
 import { ProxyService } from '../proxy/proxy.service';
-import { clearSession, readToken, sendResult } from '../proxy/http';
+import { clearSession, readToken, requestMeta, sendResult } from '../proxy/http';
 
 @Controller('auth')
 export class AuthProxyController {
@@ -10,6 +10,7 @@ export class AuthProxyController {
 
   @Post('login')
   async login(
+    @Req() req: Request,
     @Body() body: { email?: unknown; password?: unknown },
     @Res() res: Response,
   ) {
@@ -19,10 +20,11 @@ export class AuthProxyController {
     if (typeof email !== 'string' || typeof password !== 'string') {
       return res.status(400).json({ ok: false, error: 'Correo y contraseña deben ser texto.' });
     }
+    const meta = requestMeta(req);
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_LOGIN,
-      { email, password },
+      { email, password, ...meta },
     );
     return sendResult(res, result);
   }
@@ -39,10 +41,11 @@ export class AuthProxyController {
     // H-015: sin cookie no hay nada que validar; responder «sin sesión» sin error en la consola.
     const token = readToken(req);
     if (!token) return res.status(200).json({ ok: true, user: null });
+    const meta = requestMeta(req);
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_ME,
-      { token },
+      { token, ...meta },
     );
     return sendResult(res, result);
   }

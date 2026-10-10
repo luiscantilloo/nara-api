@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   hrefForRoleId,
@@ -9,9 +10,44 @@ import {
 import { DOCUMENT_STORE } from '@nara/database';
 import { sessionIssuedAt } from './session-token';
 
+function hashEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const raw = String(email).toLowerCase().trim().slice(0, 120);
+  if (!raw) return null;
+  const salt = process.env.ACCESS_LOG_EMAIL_SALT || 'nara-access-log';
+  return createHash('sha256').update(`${salt}:${raw}`).digest('hex');
+}
+
+function clientIp(ip?: string | null): string | null {
+  if (!ip) return null;
+  return String(ip).split(',')[0].trim().slice(0, 80) || null;
+}
+
 @Injectable()
 export class SessionService {
+  private indexesReady = false;
+
   constructor(@Inject(DOCUMENT_STORE) private readonly store: DocumentStore) {}
+
+  /** Índices access_log: {action,at} + TTL 90 días. */
+  private async ensureAccessLogIndexes() {
+    if (this.indexesReady) return;
+    this.indexesReady = true;
+    try {
+      const db = await (
+        this.store as { db?: () => Promise<{ collection: (n: string) => { createIndex: (k: unknown, o?: unknown) => Promise<unknown> } }> }
+      ).db?.();
+      if (!db) return;
+      const col = db.collection('access_log');
+      await col.createIndex({ action: 1, at: 1 });
+      await col.createIndex(
+        { expireAt: 1 },
+        { expireAfterSeconds: 90 * 24 * 60 * 60 },
+      );
+    } catch {
+      /* ignore */
+    }
+  }
 
   /** T-03: invalida todos los tokens emitidos hasta ahora para esta cuenta. */
   async revoke(accountId: string) {
@@ -20,7 +56,7 @@ export class SessionService {
 
   /**
    * Registro de acceso (6.19): login/401/403, sin claves ni datos clínicos.
-   * Escribe en la colección `access_log`.
+   * Correo con hash SHA-256+sal; IP y ruta cuando se pasan; consola sin correo.
    */
   async logAccess(entry: {
     action: string;
@@ -28,19 +64,74 @@ export class SessionService {
     email?: string | null;
     status?: number | null;
     path?: string | null;
+    ip?: string | null;
   }) {
-    const id = `al-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await this.ensureAccessLogIndexes();
+    const at = Date.now();
+    const action = String(entry.action || '').slice(0, 64);
+    const accountId = entry.accountId ? String(entry.accountId).slice(0, 80) : null;
+    const emailHash = hashEmail(entry.email);
+    const status = entry.status ?? null;
+    const path = entry.path ? String(entry.path).slice(0, 200) : null;
+    const ip = clientIp(entry.ip);
+
+    // Consola para Render (sin correo en claro).
+    console.log(
+      JSON.stringify({
+        kind: 'access_log',
+        action,
+        status,
+        accountId,
+        path,
+        ip,
+        at,
+      }),
+    );
+
     try {
+      // http_401 anónimos: agrupar por IP + minuto para no llenar la colección.
+      if (action === 'http_401' && !accountId) {
+        const minute = Math.floor(at / 60_000);
+        const bucketIp = ip || 'unknown';
+        const id = `al-401-${bucketIp}-${minute}`;
+        const existing = await this.store.findOne('access_log', { id });
+        if (existing) {
+          await this.store.updateOne(
+            'access_log',
+            { id },
+            {
+              $inc: { count: 1 },
+              $set: { at, path: path || existing.path || null },
+            },
+          );
+          return;
+        }
+        await this.store.upsert('access_log', { id }, {
+          id,
+          action,
+          accountId: null,
+          emailHash: null,
+          status: status ?? 401,
+          path,
+          ip: bucketIp === 'unknown' ? null : bucketIp,
+          count: 1,
+          at,
+          expireAt: new Date(at),
+        });
+        return;
+      }
+
+      const id = `al-${at}-${Math.random().toString(36).slice(2, 8)}`;
       await this.store.upsert('access_log', { id }, {
         id,
-        action: String(entry.action || '').slice(0, 64),
-        accountId: entry.accountId ? String(entry.accountId).slice(0, 80) : null,
-        email: entry.email
-          ? String(entry.email).toLowerCase().slice(0, 120)
-          : null,
-        status: entry.status ?? null,
-        path: entry.path ? String(entry.path).slice(0, 200) : null,
-        at: Date.now(),
+        action,
+        accountId,
+        emailHash,
+        status,
+        path,
+        ip,
+        at,
+        expireAt: new Date(at),
       });
     } catch {
       /* no bloquear la petición */
