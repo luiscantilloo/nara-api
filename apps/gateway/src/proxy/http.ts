@@ -29,7 +29,7 @@ export function requestMeta(req: Request): { ip: string | null; path: string } {
 
 export function sendResult(res: Response, result: Record<string, unknown>) {
   const status = Number(result.status || (result.ok ? 200 : 500));
-  const { status: _s, token, ...body } = result;
+  const { status: _s, token, retryAfter, ...body } = result;
   if (token && typeof token === 'string') {
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
@@ -38,6 +38,13 @@ export function sendResult(res: Response, result: Record<string, unknown>) {
       path: '/',
       maxAge: SESSION_MAX_AGE_SEC * 1000,
     });
+  }
+  if (status === 429) {
+    const sec = Number(retryAfter);
+    if (Number.isFinite(sec) && sec > 0) {
+      res.setHeader('Retry-After', String(Math.ceil(sec)));
+      (body as { retryAfter?: number }).retryAfter = Math.ceil(sec);
+    }
   }
   return res.status(status).json(body);
 }

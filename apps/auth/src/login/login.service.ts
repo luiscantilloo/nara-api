@@ -82,13 +82,17 @@ export class LoginService {
     // SPEC-03: contador por correo (exista o no la cuenta) en login_attempts.
     const intento = await this.store.findOne('login_attempts', { key: email });
     if (intento && Number(intento.lockUntil || 0) > now) {
+      const retryAfter = Math.max(
+        1,
+        Math.ceil((Number(intento.lockUntil) - now) / 1000),
+      );
       await this.sessions.logAccess({
         action: 'login_locked',
         email,
         status: 429,
         ...accessMeta,
       });
-      return { ok: false, status: 429, error: LOCK_ERROR };
+      return { ok: false, status: 429, error: LOCK_ERROR, retryAfter };
     }
     const fallo = async (accountId?: string) => {
       const dentro = intento && now - Number(intento.firstAt || 0) < LOCK_WINDOW_MS;
@@ -109,10 +113,14 @@ export class LoginService {
         ...accessMeta,
       });
       await this.maybeAlertLoginFails(now);
+      const retryAfter = lockUntil
+        ? Math.max(1, Math.ceil((lockUntil - now) / 1000))
+        : undefined;
       return {
         ok: false,
         status: lockUntil ? 429 : 401,
         error: lockUntil ? LOCK_ERROR : LOGIN_ERROR,
+        ...(retryAfter ? { retryAfter } : {}),
       };
     };
 

@@ -2,6 +2,11 @@ import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Patterns } from '@nara/common';
 import { ProxyService } from '../proxy/proxy.service';
+import {
+  checkLoginIpLimit,
+  clearLoginIpFailures,
+  recordLoginIpFailure,
+} from './login-ip-limit';
 import { clearSession, readToken, requestMeta, sendResult } from '../proxy/http';
 
 @Controller('auth')
@@ -21,11 +26,26 @@ export class AuthProxyController {
       return res.status(400).json({ ok: false, error: 'Correo y contraseña deben ser texto.' });
     }
     const meta = requestMeta(req);
+    const ipLimit = checkLoginIpLimit(meta.ip);
+    if (!ipLimit.ok) {
+      res.setHeader('Retry-After', String(ipLimit.retryAfter));
+      return res.status(429).json({
+        ok: false,
+        error: 'Demasiados intentos desde esta red. Espere unos minutos e intente de nuevo.',
+        retryAfter: ipLimit.retryAfter,
+      });
+    }
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_LOGIN,
       { email, password, ...meta },
     );
+    const status = Number(result.status || (result.ok ? 200 : 500));
+    if (status === 401 || status === 429) {
+      recordLoginIpFailure(meta.ip);
+    } else if (status === 200) {
+      clearLoginIpFailures(meta.ip);
+    }
     return sendResult(res, result);
   }
 
