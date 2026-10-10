@@ -85,9 +85,12 @@ async function resolveScope(
 }
 
 /** SPEC-02 FR-02.7: experto y clínico solo ven en el contexto de TEO lo de su territorio. */
+// H-005 (reporte TRL 2026-10-10): TEO cuenta lo mismo que /api/people y /api/patients (sin archivados).
+const VIGENTES = { archived: { $ne: true } };
+
 function scopePatientFilter(scope: Scope, roleId: string): Record<string, unknown> {
-  if (roleId !== 'experto' && roleId !== 'clinico') return {};
-  return { terr: scope.terr || '__sin_territorio__' };
+  if (roleId !== 'experto' && roleId !== 'clinico') return { ...VIGENTES };
+  return { terr: scope.terr || '__sin_territorio__', ...VIGENTES };
 }
 
 /** Une filtro de alcance con otra condición sin pisar $or. */
@@ -110,7 +113,7 @@ export async function buildStaffContext(
   const nameHint = nameHintFrom(question);
   const scope = await resolveScope(db, roleId, userId);
   const scopeFilter = scopePatientFilter(scope, roleId);
-  const scoped = Object.keys(scopeFilter).length > 0;
+  const scoped = roleId === 'experto' || roleId === 'clinico'; // con territorio (ver scopePatientFilter)
   const terrIds = scoped
     ? (await db.collection('people').find(scopeFilter, { projection: { id: 1 } }).toArray()).map((p) => p.id)
     : [];

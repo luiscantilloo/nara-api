@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   DEFAULT_PATIENT_MODULES,
   NARA_ROLES,
+  clinicoDelTerritorio,
   ROLE_LABEL_TO_ID,
   normalizeModuleIds,
   type DocumentStore,
@@ -455,16 +456,8 @@ export class AccountsService {
     // Clínico por territorio (misma lógica de campo).
     let clin = String(personDoc?.clin || existingPatient?.clin || body.clin || '').trim();
     if (!clin && terrName) {
-      const t = terrName.toLowerCase();
-      if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
-        clin = 'Dr. Felipe Ruiz';
-      } else if (
-        /manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)
-      ) {
-        clin = 'Dra. Carolina Úsuga';
-      } else {
-        clin = 'Dra. Lucía Marín';
-      }
+      // H-009: la cuenta Clínico activa del territorio, no un nombre fijo.
+      clin = (await clinicoDelTerritorio((c, q) => db.collection(c).findOne(q), terrName)) || '';
     }
 
     // Experto del territorio al crear (no esperar a la evaluación).

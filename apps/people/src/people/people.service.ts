@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DocumentStore } from '@nara/common';
-import { andScope, inScope, terrFilter } from '@nara/common';
+import { andScope, clinicoDelTerritorio, errorFechaNacimiento, errorTelefono, inScope, terrFilter } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
@@ -231,6 +231,17 @@ export class PeopleService {
       existing = await this.store.findOne('people', { id: bodyId });
     }
     const terr = String(body.terr ?? existing?.terr ?? '').trim();
+    // H-007 (SPEC-005 FR-003): al crear o al cambiar el dato, mismas reglas que el formulario (400).
+    const cambia = (k: string) => body[k] !== undefined && String(body[k] ?? '') !== String(existing?.[k] ?? '');
+    const invalido =
+      (cambia('birthDate') && errorFechaNacimiento(body.birthDate)) ||
+      (cambia('phone') && errorTelefono(body.phone));
+    if (invalido) return { ok: false, status: 400, error: invalido };
+    // H-009: clínico real del territorio (solo si la ficha todavía no tiene uno).
+    const clinTerr =
+      body.clin || body.clin === null || existing?.clin
+        ? null
+        : await clinicoDelTerritorio((c, q) => this.store.findOne(c, q), terr);
     // SPEC-02 FR-02.2: experto y clínico solo escriben personas de su territorio.
     if (
       auth.user.roleId !== 'admin' &&
@@ -338,17 +349,11 @@ export class PeopleService {
               ? Number(existing.activeAt) || null
               : null,
       clin: (() => {
-        if (body.clin !== undefined) return body.clin || null;
+        if (body.clin) return String(body.clin);
+        if (body.clin === null) return null;
         if (existing?.clin) return existing.clin;
         // Clínico por territorio al crear la ficha (no esperar evaluación).
-        const t = terr.toLowerCase();
-        if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
-          return 'Dr. Felipe Ruiz';
-        }
-        if (/manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)) {
-          return 'Dra. Carolina Úsuga';
-        }
-        return terr ? 'Dra. Lucía Marín' : null;
+        return clinTerr;
       })(),
       phone:
         body.phone != null
@@ -449,7 +454,7 @@ export class PeopleService {
           const prevDates = Array.isArray(existingPat?.phqDates)
             ? (existingPat!.phqDates as string[])
             : [];
-          patSet.phqDates = prevDates.concat(['Hoy']);
+          patSet.phqDates = prevDates.concat([new Date().toISOString().slice(0, 10)]); // H-013: fecha ISO
         }
       }
       Object.keys(patSet).forEach((k) => {
