@@ -77,6 +77,8 @@ export const APP_STATE_SLICES = [
   'schedules',
   'agentLog',
   'aiLog',
+  /** Check-ins de ánimo por paciente (historial clínico). */
+  'moodLogs',
   'recursos',
   'activity',
   'accessLog',
