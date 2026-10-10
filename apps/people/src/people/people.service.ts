@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DocumentStore } from '@nara/common';
+import { andScope, inScope, terrFilter } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
-import { publicPerson } from '../shared/mappers/person.mapper';
+import { observerPerson, publicPerson } from '../shared/mappers/person.mapper';
 
 @Injectable()
 export class PeopleService {
@@ -27,9 +28,14 @@ export class PeopleService {
     ]);
     if ('error' in auth) return auth.error;
 
-    const filter: Record<string, unknown> = {};
-    if (data.terr) filter.terr = data.terr;
-    if (data.q) filter.name = { $regex: data.q, $options: 'i' };
+    const client: Record<string, unknown> = {};
+    if (data.terr) client.terr = data.terr;
+    if (data.q) client.name = { $regex: data.q, $options: 'i' };
+    // SPEC-02 FR-02.1: el servidor aplica el territorio; el observador ve todo, pero anonimizado (FR-02.4).
+    const isObserver = auth.user.roleId === 'observador';
+    const scope = isObserver ? {} : terrFilter(auth.user);
+    if (!scope) return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    const filter = isObserver ? {} : andScope(scope, client);
     const limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
     const skip = Math.max(Number(data.skip) || 0, 0);
     const [total, rows] = await Promise.all([
@@ -42,7 +48,7 @@ export class PeopleService {
       total,
       limit,
       skip,
-      people: rows.map(publicPerson),
+      people: isObserver ? rows.map((r, i) => observerPerson(r, i)) : rows.map(publicPerson),
     };
   }
 
@@ -196,6 +202,14 @@ export class PeopleService {
       existing = await this.store.findOne('people', { id: bodyId });
     }
     const terr = String(body.terr ?? existing?.terr ?? '').trim();
+    // SPEC-02 FR-02.2: experto y clínico solo escriben personas de su territorio.
+    if (
+      auth.user.roleId !== 'admin' &&
+      ((existing && !inScope(auth.user, existing)) ||
+        !inScope(auth.user, { terr }))
+    ) {
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
     const pre =
       (
         { Salento: 'SAL', Armenia: 'ARM', Calarcá: 'CAL' } as Record<

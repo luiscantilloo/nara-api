@@ -43,39 +43,33 @@ export class AuthProxyController {
     return sendResult(res, result);
   }
 
+  // SPEC-01 FR-01.1 (P-9): el flujo que entregaba un token de restablecimiento a quien supiera
+  // correo, nombre y apellido queda retirado.
   @Post('verify-identity')
-  async verifyIdentity(
-    @Body()
-    body: { email?: string; firstName?: string; lastName?: string },
-    @Res() res: Response,
-  ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'auth',
-      Patterns.AUTH_VERIFY_IDENTITY,
-      {
-        email: body.email || '',
-        firstName: body.firstName || '',
-        lastName: body.lastName || '',
-      },
-    );
-    return sendResult(res, result);
+  verifyIdentity(@Res() res: Response) {
+    return res.status(410).json({ ok: false, error: 'Este método de recuperación ya no existe. Pida al administrador que le restablezca la clave.' });
   }
 
   @Post('reset-password')
-  async resetPassword(
-    @Body()
-    body: { email?: string; resetToken?: string; password?: string },
-    @Res() res: Response,
-  ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'auth',
-      Patterns.AUTH_RESET_PASSWORD,
-      {
-        email: body.email || '',
-        resetToken: body.resetToken || '',
-        password: body.password || '',
-      },
-    );
+  resetPassword(@Res() res: Response) {
+    return res.status(410).json({ ok: false, error: 'Este método de recuperación ya no existe. Pida al administrador que le restablezca la clave.' });
+  }
+
+  @Post('assisted-reset')
+  async assistedReset(@Req() req: Request, @Body() body: { accountId?: string }, @Res() res: Response) {
+    const result = await this.proxy.send<Record<string, unknown>>('auth', Patterns.AUTH_ASSISTED_RESET, {
+      token: readToken(req),
+      accountId: body.accountId || '',
+    });
+    return sendResult(res, result);
+  }
+
+  @Post('change-password')
+  async changePassword(@Req() req: Request, @Body() body: { newPassword?: string }, @Res() res: Response) {
+    const result = await this.proxy.send<Record<string, unknown>>('auth', Patterns.AUTH_CHANGE_PASSWORD, {
+      token: readToken(req),
+      newPassword: body.newPassword || '',
+    });
     return sendResult(res, result);
   }
 }

@@ -117,6 +117,8 @@ export type SessionUser = {
   href: string;
   nk: string | null;
   patientId?: string;
+  /** SPEC-01: true hasta que la persona cree su clave nueva. */
+  mustChangePassword?: boolean;
   /** @deprecated Observador ya no usa tipos; se ignora al guardar. */
   orgType?: string;
   modules?: string[];

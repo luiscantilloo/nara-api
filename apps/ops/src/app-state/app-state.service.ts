@@ -11,6 +11,7 @@ import {
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
+import { filtrarLectura, idsDelTerritorio, restringirEscritura } from './app-state.policy';
 
 @Injectable()
 export class AppStateService {
@@ -39,7 +40,10 @@ export class AppStateService {
         .findOne({ key: 'main' });
       if (main?.rules) slices.rules = main.rules;
     }
-    return { ok: true, status: 200, slices, keys: [...APP_STATE_SLICES] };
+    const ids = ['experto', 'clinico'].includes(auth.user.roleId)
+      ? await idsDelTerritorio(db, String(auth.user.terr || ''))
+      : null;
+    return { ok: true, status: 200, slices: filtrarLectura(slices, auth.user, ids), keys: [...APP_STATE_SLICES] };
   }
 
   async put(token: string | null, body: Record<string, unknown>) {
@@ -53,12 +57,23 @@ export class AppStateService {
     if (!body.slices || typeof body.slices !== 'object') {
       return { ok: false, status: 400, error: 'slices obligatorio' };
     }
-    const slices = pickAppStateSlices(body.slices as Record<string, unknown>);
     const db = await this.mongo.db();
     const now = new Date();
     const existing = await db
       .collection('program_settings')
       .findOne({ key: APP_STATE_KEY });
+    const ids = ['experto', 'clinico'].includes(auth.user.roleId)
+      ? await idsDelTerritorio(db, String(auth.user.terr || ''))
+      : null;
+    const slices = restringirEscritura(
+      pickAppStateSlices(body.slices as Record<string, unknown>),
+      existing as Record<string, unknown> | null,
+      auth.user,
+      ids,
+    );
+    if (!Object.keys(slices).length) {
+      return { ok: true, status: 200, ignored: true };
+    }
 
     // Multi-cliente: unir alertas/log/cerradas para que «Estoy en crisis» del
     // paciente no lo pise un persist viejo del clínico (y viceversa al cerrar).

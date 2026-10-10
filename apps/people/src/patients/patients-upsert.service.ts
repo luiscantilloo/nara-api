@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { normalizeModuleIds } from '@nara/common';
+import { inScope, normalizeModuleIds } from '@nara/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
@@ -148,6 +148,14 @@ export class PatientsUpsertService {
           ? body.place
           : existing?.terr || '',
     ).trim();
+    // SPEC-02 FR-02.2: experto y clínico solo escriben fichas de su territorio.
+    if (
+      auth.user.roleId !== 'admin' &&
+      ((existing && !inScope(auth.user, existing as { terr?: unknown })) ||
+        !inScope(auth.user, { terr }))
+    ) {
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
     let expert = String(
       body.expert != null ? body.expert : existing?.expert || '',
     ).trim();

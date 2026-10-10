@@ -61,6 +61,7 @@ export class SessionService {
       href,
       nk: resolveNotifKey(roleId, String(account.id)),
       patientId,
+      mustChangePassword: account.mustChangePassword === true,
       ...(orgType ? { orgType } : {}),
       ...(modules ? { modules } : {}),
     };

@@ -6,6 +6,8 @@ export const Patterns = {
   AUTH_VERIFY: 'auth.verify',
   AUTH_VERIFY_IDENTITY: 'auth.verifyIdentity',
   AUTH_RESET_PASSWORD: 'auth.resetPassword',
+  AUTH_ASSISTED_RESET: 'auth.assistedReset',
+  AUTH_CHANGE_PASSWORD: 'auth.changePassword',
 
   PEOPLE_LIST: 'people.list',
   PEOPLE_UPSERT: 'people.upsert',
