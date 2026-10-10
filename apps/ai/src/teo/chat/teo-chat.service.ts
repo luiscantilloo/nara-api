@@ -5,6 +5,7 @@ import { llmComplete, isLlmConfigured } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
 import { crisisCheck, escalarCrisis, esRespuestaCrisis, textoDeCrisis } from './teo-crisis';
+import { TEO_RATE_LIMIT_ERROR, teoRateLimitOk } from '../rate-limit';
 
 /** H-006 (reporte TRL 2026-10-10): nombres de los servicios de la ruta, para que TEO pueda hablar de ella. */
 const SERVICIOS: Record<string, string> = {
@@ -42,6 +43,7 @@ export class TeoChatService {
   }) {
     const auth = await requireRoles(this.sessions, data.token, ['paciente']);
     if ('error' in auth) return auth.error;
+    if (!teoRateLimitOk(auth.user.id)) return TEO_RATE_LIMIT_ERROR;
 
     try {
       const message = String(data.message || '').trim();
@@ -78,7 +80,7 @@ export class TeoChatService {
       const patientSnap = patient
         ? JSON.stringify({
             id: patient.id,
-            name: patient.name,
+            code: patient.code || '',
             age: patient.age,
             place: patient.place,
             profile: patient.profile,

@@ -22,6 +22,7 @@ export async function llmComplete(prompt: string, opts?: LlmCompleteOpts) {
       const r = await geminiComplete(prompt, {
         temperature: opts?.temperature,
         maxTokens: opts?.maxTokens,
+        system: opts?.system,
       });
       return { ...r, provider: 'gemini' as const };
     }
@@ -30,6 +31,7 @@ export async function llmComplete(prompt: string, opts?: LlmCompleteOpts) {
     const r = await geminiComplete(prompt, {
       temperature: opts?.temperature,
       maxTokens: opts?.maxTokens,
+      system: opts?.system,
     });
     return { ...r, provider: 'gemini' as const };
   }

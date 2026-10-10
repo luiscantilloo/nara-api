@@ -15,19 +15,24 @@ async function callModel(
   if (!key) throw new Error('Falta GEMINI_API_KEY en el entorno.');
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const body: Record<string, unknown> = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: opts?.temperature ?? 0.4,
+      maxOutputTokens: opts?.maxTokens ?? 1024,
+    },
+  };
+  // 6.36: pasar system también en Gemini (antes solo iba a OpenAI).
+  if (opts?.system) {
+    body.systemInstruction = { parts: [{ text: opts.system }] };
+  }
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-goog-api-key': key,
     },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: opts?.temperature ?? 0.4,
-        maxOutputTokens: opts?.maxTokens ?? 1024,
-      },
-    }),
+    body: JSON.stringify(body),
   });
 
   const data = (await res.json()) as {

@@ -1,4 +1,4 @@
-/** Proyección clínica para TEO (alineada con publicPatient, sin depender de people). */
+/** Proyección clínica para TEO (sin teléfono ni nombre; se usa código). */
 export function toTeoPatient(doc: Record<string, unknown>) {
   const modulesEnabled = Array.isArray(doc.modulesEnabled)
     ? doc.modulesEnabled
@@ -6,15 +6,12 @@ export function toTeoPatient(doc: Record<string, unknown>) {
   return {
     id: doc.id,
     code: doc.code || '',
-    name: doc.name,
-    email: doc.email || '',
     age: doc.age || 0,
     place: doc.place || '',
     terr: doc.terr || '',
     municipio: doc.municipio || '',
     departamento: doc.departamento || '',
     profile: doc.profile || null,
-    phone: doc.phone || '',
     phq: doc.phq || [],
     phqDates: doc.phqDates || [],
     expert: doc.expert || '',

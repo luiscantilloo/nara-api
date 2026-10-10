@@ -4,6 +4,7 @@ import { SessionService } from '@nara/auth-core';
 import { llmComplete, isLlmConfigured } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { buildContext } from '../context/context.builder';
+import { TEO_RATE_LIMIT_ERROR, teoRateLimitOk } from '../rate-limit';
 
 const SYSTEM = `Eres TEO, el asistente de NARA (salud mental post-sismo en Colombia).
 Hablas como un colega del programa: español natural, claro, de usted, tono cercano y profesional.
@@ -77,6 +78,7 @@ export class TeoAskService {
       'paciente',
     ]);
     if ('error' in auth) return auth.error;
+    if (!teoRateLimitOk(auth.user.id)) return TEO_RATE_LIMIT_ERROR;
 
     const question = String(data.question || data.text || '').trim();
     if (!question)

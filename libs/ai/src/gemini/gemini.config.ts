@@ -19,4 +19,5 @@ export function isGeminiConfigured() {
 export type GeminiCompleteOpts = {
   temperature?: number;
   maxTokens?: number;
+  system?: string;
 };
