@@ -4,6 +4,7 @@ import { SessionService } from '@nara/auth-core';
 import { llmComplete, isLlmConfigured } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
+import { crisisCheck, escalarCrisis, esRespuestaCrisis, textoDeCrisis } from './teo-crisis';
 
 @Injectable()
 export class TeoChatService {
@@ -67,6 +68,24 @@ export class TeoChatService {
           })
         : '(sin ficha en Mongo)';
 
+      // H-001: el servidor escala la crisis con el patientId de la sesión, sin depender del navegador.
+      const escalar = async (termino: string) => {
+        try {
+          const r = await escalarCrisis(db, {
+            patientId: String(patient?.id || patientId),
+            patient,
+            nombre: name,
+            dicho: message,
+            termino,
+          });
+          return { ok: true, status: 200, crisis: true, escalada: true, alertId: r.alertId, text: textoDeCrisis(fname, true) };
+        } catch {
+          return { ok: true, status: 200, crisis: true, escalada: false, text: textoDeCrisis(fname, false) };
+        }
+      };
+      const termino = message ? crisisCheck(message) : null;
+      if (termino) return await escalar(termino);
+
       if (!isLlmConfigured()) {
         return {
           ok: false,
@@ -96,6 +115,7 @@ TEO:`;
         temperature: 0.55,
         maxTokens: 400,
       });
+      if (esRespuestaCrisis(text)) return { ...(await escalar('clasificador IA')), model, provider };
       return { ok: true, status: 200, text: text.trim(), model, provider };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error en TEO';
