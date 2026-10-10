@@ -5,6 +5,7 @@ import { AuthCoreModule } from '@nara/auth-core';
 import { TeoController } from './teo/teo.controller';
 import { TeoAskService } from './teo/ask/teo-ask.service';
 import { TeoChatService } from './teo/chat/teo-chat.service';
+import { TeoConversationsService } from './teo/conversations/teo-conversations.service';
 
 @Module({
   imports: [
@@ -13,6 +14,11 @@ import { TeoChatService } from './teo/chat/teo-chat.service';
     AuthCoreModule,
   ],
   controllers: [TeoController],
-  providers: [TeoAskService, TeoChatService, MongoStore],
+  providers: [
+    TeoAskService,
+    TeoChatService,
+    TeoConversationsService,
+    MongoStore,
+  ],
 })
 export class AiModule {}

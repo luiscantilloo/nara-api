@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Patterns } from '@nara/common';
 import { ProxyService } from '../proxy/proxy.service';
@@ -69,6 +69,60 @@ export class AiProxyController {
         error:
           'TEO no pudo conectar con el servicio de IA. Reinicie nara-api (ai en :4004). ' +
           message,
+      });
+    }
+  }
+
+  @Get('conversations')
+  async listConversations(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('patientId') patientId?: string,
+    @Query('patientName') patientName?: string,
+  ) {
+    try {
+      const result = await this.proxy.send<Record<string, unknown>>(
+        'ai',
+        Patterns.TEO_CONVERSATIONS_LIST,
+        {
+          token: readToken(req),
+          patientId,
+          patientName,
+        },
+      );
+      return sendResult(res, result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Servicio TEO no disponible';
+      return res.status(503).json({
+        ok: false,
+        error: 'No se pudieron cargar las conversaciones. ' + message,
+      });
+    }
+  }
+
+  @Post('conversations')
+  async upsertConversation(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Body() body: Record<string, unknown>,
+  ) {
+    try {
+      const result = await this.proxy.send<Record<string, unknown>>(
+        'ai',
+        Patterns.TEO_CONVERSATIONS_UPSERT,
+        {
+          token: readToken(req),
+          body,
+        },
+      );
+      return sendResult(res, result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Servicio TEO no disponible';
+      return res.status(503).json({
+        ok: false,
+        error: 'No se pudo guardar la conversación. ' + message,
       });
     }
   }
