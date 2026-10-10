@@ -38,6 +38,8 @@ export const Patterns = {
 
   TEO_ASK: 'ai.teo.ask',
   TEO_CHAT: 'ai.teo.chat',
+  TEO_CONVERSATIONS_LIST: 'ai.teo.conversations.list',
+  TEO_CONVERSATIONS_UPSERT: 'ai.teo.conversations.upsert',
 } as const;
 
 export type Pattern = (typeof Patterns)[keyof typeof Patterns];

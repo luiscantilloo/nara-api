@@ -40,13 +40,14 @@ export class PatientsUpsertService {
           await db.collection('patients').findOne({ accountId: auth.user.id })
         )?.id;
       const ownId = linked ? String(linked) : '';
-      if (!ownId || (id !== ownId && id !== auth.user.id)) {
+      if (!ownId) {
         return {
           ok: false,
           status: 403,
-          error: 'Solo puede actualizar su propia ficha.',
+          error: 'Sin ficha vinculada.',
         };
       }
+      // Siempre escribe sobre la ficha vinculada (ignora id erróneo del cliente).
       const status = String(body.status || body.signal || '').trim();
       const isCrisis = /^crisis$/i.test(status);
       const isInactive =
