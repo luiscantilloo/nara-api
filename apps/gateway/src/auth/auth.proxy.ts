@@ -10,72 +10,70 @@ export class AuthProxyController {
 
   @Post('login')
   async login(
-    @Body() body: { email?: string; password?: string },
+    @Body() body: { email?: unknown; password?: unknown },
     @Res() res: Response,
   ) {
+    // H-007: correo y clave deben ser texto; un objeto ({"$gt":""}) es una petición inválida.
+    const email = body?.email ?? '';
+    const password = body?.password ?? '';
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Correo y contraseña deben ser texto.' });
+    }
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_LOGIN,
-      {
-        email: body.email || '',
-        password: body.password || '',
-      },
+      { email, password },
     );
     return sendResult(res, result);
   }
 
   @Post('logout')
-  async logout(@Res() res: Response) {
-    await this.proxy.send('auth', Patterns.AUTH_LOGOUT, {});
+  async logout(@Req() req: Request, @Res() res: Response) {
+    await this.proxy.send('auth', Patterns.AUTH_LOGOUT, { token: readToken(req) });
     clearSession(res);
     return res.status(200).json({ ok: true });
   }
 
   @Get('me')
   async me(@Req() req: Request, @Res() res: Response) {
+    // H-015: sin cookie no hay nada que validar; responder «sin sesión» sin error en la consola.
+    const token = readToken(req);
+    if (!token) return res.status(200).json({ ok: true, user: null });
     const result = await this.proxy.send<Record<string, unknown>>(
       'auth',
       Patterns.AUTH_ME,
-      {
-        token: readToken(req),
-      },
+      { token },
     );
     return sendResult(res, result);
   }
 
+  // SPEC-01 FR-01.1 (P-9): el flujo que entregaba un token de restablecimiento a quien supiera
+  // correo, nombre y apellido queda retirado.
   @Post('verify-identity')
-  async verifyIdentity(
-    @Body()
-    body: { email?: string; firstName?: string; lastName?: string },
-    @Res() res: Response,
-  ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'auth',
-      Patterns.AUTH_VERIFY_IDENTITY,
-      {
-        email: body.email || '',
-        firstName: body.firstName || '',
-        lastName: body.lastName || '',
-      },
-    );
-    return sendResult(res, result);
+  verifyIdentity(@Res() res: Response) {
+    return res.status(410).json({ ok: false, error: 'Este método de recuperación ya no existe. Pida al administrador que le restablezca la clave.' });
   }
 
   @Post('reset-password')
-  async resetPassword(
-    @Body()
-    body: { email?: string; resetToken?: string; password?: string },
-    @Res() res: Response,
-  ) {
-    const result = await this.proxy.send<Record<string, unknown>>(
-      'auth',
-      Patterns.AUTH_RESET_PASSWORD,
-      {
-        email: body.email || '',
-        resetToken: body.resetToken || '',
-        password: body.password || '',
-      },
-    );
+  resetPassword(@Res() res: Response) {
+    return res.status(410).json({ ok: false, error: 'Este método de recuperación ya no existe. Pida al administrador que le restablezca la clave.' });
+  }
+
+  @Post('assisted-reset')
+  async assistedReset(@Req() req: Request, @Body() body: { accountId?: string }, @Res() res: Response) {
+    const result = await this.proxy.send<Record<string, unknown>>('auth', Patterns.AUTH_ASSISTED_RESET, {
+      token: readToken(req),
+      accountId: body.accountId || '',
+    });
+    return sendResult(res, result);
+  }
+
+  @Post('change-password')
+  async changePassword(@Req() req: Request, @Body() body: { newPassword?: string }, @Res() res: Response) {
+    const result = await this.proxy.send<Record<string, unknown>>('auth', Patterns.AUTH_CHANGE_PASSWORD, {
+      token: readToken(req),
+      newPassword: body.newPassword || '',
+    });
     return sendResult(res, result);
   }
 }

@@ -1,9 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DocumentStore } from '@nara/common';
+import { andScope, clinicoDelTerritorio, errorFechaNacimiento, errorTelefono, inScope, terrFilter } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
 import { publicPerson } from '../shared/mappers/person.mapper';
+import { observerSummary } from '../shared/mappers/observer-summary';
 
 @Injectable()
 export class PeopleService {
@@ -27,9 +29,19 @@ export class PeopleService {
     ]);
     if ('error' in auth) return auth.error;
 
-    const filter: Record<string, unknown> = {};
-    if (data.terr) filter.terr = data.terr;
-    if (data.q) filter.name = { $regex: data.q, $options: 'i' };
+    // H-004 (TRL 2026-10-10): el observador solo recibe conteos agregados, nunca filas por persona.
+    if (auth.user.roleId === 'observador') {
+      const rows = await this.store.findMany('people', { archived: { $ne: true } }, { limit: 20000 });
+      return { ok: true, status: 200, summary: observerSummary(rows) };
+    }
+
+    const client: Record<string, unknown> = {};
+    if (data.terr) client.terr = data.terr;
+    if (data.q) client.name = { $regex: data.q, $options: 'i' };
+    // SPEC-02 FR-02.1: el servidor aplica el territorio.
+    const scope = terrFilter(auth.user);
+    if (!scope) return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    const filter = andScope(andScope(scope, client), { archived: { $ne: true } });
     const limit = Math.min(Math.max(Number(data.limit) || 5000, 1), 20000);
     const skip = Math.max(Number(data.skip) || 0, 0);
     const [total, rows] = await Promise.all([
@@ -44,6 +56,24 @@ export class PeopleService {
       skip,
       people: rows.map(publicPerson),
     };
+  }
+
+  /**
+   * H-013: archivar una persona (solo admin). No se borra: queda `archived` con quién y cuándo,
+   * y deja de aparecer en las listas. Sirve para retirar registros de prueba o duplicados.
+   */
+  async archive(data: { token: string | null; id: string; reason?: string }) {
+    const auth = await requireRoles(this.sessions, data.token, ['admin']);
+    if ('error' in auth) return auth.error;
+    const id = String(data.id || '').trim();
+    if (!id) return { ok: false, status: 400, error: 'Falta el id.' };
+    const person = await this.store.findOne('people', { id });
+    if (!person) return { ok: false, status: 404, error: 'Persona no encontrada.' };
+    const now = new Date();
+    const archivedBy = { id: auth.user.id, at: now, reason: String(data.reason || '').slice(0, 200) };
+    await this.store.updateOne('people', { id }, { $set: { archived: true, archivedBy, updatedAt: now } });
+    await this.store.updateOne('patients', { id }, { $set: { archived: true, archivedBy, updatedAt: now } });
+    return { ok: true, status: 200, id, archived: true };
   }
 
   /**
@@ -185,17 +215,41 @@ export class PeopleService {
     }
 
     // Resolver ficha real: el worklist a veces manda otro id distinto al de people.
+    // Reporte TRL 2026-10-10: las búsquedas por código o nombre nunca devuelven una ficha archivada, y la de
+    // nombre exige el mismo territorio. Antes una persona nueva podía caer sobre la ficha de otra (el código del
+    // front sale de un conteo y se repite) y sobrescribirla.
+    const activa = { archived: { $ne: true } };
+    const terrBody = String(body.terr || '').trim();
     let existing =
       (bodyId ? await this.store.findOne('people', { id: bodyId }) : null) ||
       (bodyCode
-        ? await this.store.findOne('people', { code: bodyCode })
+        ? await this.store.findOne('people', { code: bodyCode, ...activa })
         : null) ||
-      (name ? await this.store.findOne('people', { name }) : null);
+      (name && terrBody ? await this.store.findOne('people', { name, terr: terrBody, ...activa }) : null);
     const id = String(existing?.id || bodyId || `p${Date.now().toString(36)}`);
     if (!existing && bodyId) {
       existing = await this.store.findOne('people', { id: bodyId });
     }
     const terr = String(body.terr ?? existing?.terr ?? '').trim();
+    // H-007 (SPEC-005 FR-003): al crear o al cambiar el dato, mismas reglas que el formulario (400).
+    const cambia = (k: string) => body[k] !== undefined && String(body[k] ?? '') !== String(existing?.[k] ?? '');
+    const invalido =
+      (cambia('birthDate') && errorFechaNacimiento(body.birthDate)) ||
+      (cambia('phone') && errorTelefono(body.phone));
+    if (invalido) return { ok: false, status: 400, error: invalido };
+    // H-009: clínico real del territorio (solo si la ficha todavía no tiene uno).
+    const clinTerr =
+      body.clin || body.clin === null || existing?.clin
+        ? null
+        : await clinicoDelTerritorio((c, q) => this.store.findOne(c, q), terr);
+    // SPEC-02 FR-02.2: experto y clínico solo escriben personas de su territorio.
+    if (
+      auth.user.roleId !== 'admin' &&
+      ((existing && !inScope(auth.user, existing)) ||
+        !inScope(auth.user, { terr }))
+    ) {
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
     const pre =
       (
         { Salento: 'SAL', Armenia: 'ARM', Calarcá: 'CAL' } as Record<
@@ -206,9 +260,15 @@ export class PeopleService {
       terr.slice(0, 3).toUpperCase() ||
       'NAR';
     const count = await this.store.count('people');
-    const code = String(
-      body.code || existing?.code || `${pre}-${1000 + count + 1}`,
-    );
+    // El código es único (índice). Si el que propone el cliente ya pertenece a otra ficha (por ejemplo, una
+    // archivada), la API asigna el siguiente libre en vez de fallar con 500.
+    let code = String(existing?.code || body.code || `${pre}-${1000 + count + 1}`);
+    const dueño = await this.store.findOne('people', { code });
+    if (dueño && String(dueño.id) !== id) {
+      let n = 1000 + count + 1;
+      while (await this.store.findOne('people', { code: `${pre}-${n}` })) n += 1;
+      code = `${pre}-${n}`;
+    }
 
     let expert = String(body.expert ?? existing?.expert ?? '').trim();
     let expertId =
@@ -289,17 +349,11 @@ export class PeopleService {
               ? Number(existing.activeAt) || null
               : null,
       clin: (() => {
-        if (body.clin !== undefined) return body.clin || null;
+        if (body.clin) return String(body.clin);
+        if (body.clin === null) return null;
         if (existing?.clin) return existing.clin;
         // Clínico por territorio al crear la ficha (no esperar evaluación).
-        const t = terr.toLowerCase();
-        if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
-          return 'Dr. Felipe Ruiz';
-        }
-        if (/manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)) {
-          return 'Dra. Carolina Úsuga';
-        }
-        return terr ? 'Dra. Lucía Marín' : null;
+        return clinTerr;
       })(),
       phone:
         body.phone != null
@@ -400,7 +454,7 @@ export class PeopleService {
           const prevDates = Array.isArray(existingPat?.phqDates)
             ? (existingPat!.phqDates as string[])
             : [];
-          patSet.phqDates = prevDates.concat(['Hoy']);
+          patSet.phqDates = prevDates.concat([new Date().toISOString().slice(0, 10)]); // H-013: fecha ISO
         }
       }
       Object.keys(patSet).forEach((k) => {

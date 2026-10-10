@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DocumentStore } from '@nara/common';
+import { andScope, terrFilter } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
@@ -19,7 +20,10 @@ export class PatientsListService {
       'experto',
     ]);
     if ('error' in auth) return auth.error;
-    const rows = await this.store.findMany('patients', {}, { limit: 20000 });
+    // SPEC-02 FR-02.1 (P-8): experto y clínico solo reciben pacientes de su territorio.
+    const scope = terrFilter(auth.user);
+    if (!scope) return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    const rows = await this.store.findMany('patients', andScope(scope, { archived: { $ne: true } }), { limit: 20000 });
     return { ok: true, status: 200, patients: rows.map(publicPatient) };
   }
 }

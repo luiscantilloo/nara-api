@@ -23,6 +23,9 @@ function fmtGroup(
     .join('; ');
 }
 
+// H-005 (reporte TRL 2026-10-10): las cifras del observador excluyen a las personas archivadas, como su tablero.
+const VIGENTES = { archived: { $ne: true } };
+
 /** Solo agregados — nunca nombres, correos ni teléfonos. */
 export async function buildObserverContext(db: Db, roleId: string) {
   const [
@@ -43,32 +46,37 @@ export async function buildObserverContext(db: Db, roleId: string) {
     assetsByKind,
     appStateDoc,
   ] = await Promise.all([
-    db.collection('people').countDocuments(),
-    db.collection('patients').countDocuments(),
+    db.collection('people').countDocuments(VIGENTES),
+    db.collection('patients').countDocuments(VIGENTES),
     db.collection('experts').countDocuments(),
     db.collection('territories').countDocuments(),
     agg(db, 'people', [
+      { $match: VIGENTES },
       { $group: { _id: '$status', n: { $sum: 1 } } },
       { $sort: { n: -1 } },
     ]),
     agg(db, 'people', [
+      { $match: VIGENTES },
       { $group: { _id: '$terr', n: { $sum: 1 } } },
       { $sort: { n: -1 } },
       { $limit: 20 },
     ]),
     agg(db, 'people', [
+      { $match: VIGENTES },
       { $group: { _id: '$profile', n: { $sum: 1 } } },
       { $sort: { n: -1 } },
       { $limit: 15 },
     ]),
     agg(db, 'patients', [
+      { $match: VIGENTES },
       { $group: { _id: '$status', n: { $sum: 1 } } },
       { $sort: { n: -1 } },
     ]),
-    db.collection('patients').countDocuments({ crisisLock: true }).catch(() => 0),
+    db.collection('patients').countDocuments({ crisisLock: true, ...VIGENTES }).catch(() => 0),
     db
       .collection('patients')
       .countDocuments({
+        ...VIGENTES,
         $or: [
           { inactiveLock: true },
           { status: { $regex: /^inactivo$/i } },
@@ -78,6 +86,7 @@ export async function buildObserverContext(db: Db, roleId: string) {
     db
       .collection('people')
       .countDocuments({
+        ...VIGENTES,
         $or: [
           { pendingEval: true },
           { status: { $regex: /por\s*aprobar/i } },

@@ -21,9 +21,9 @@
     "start:prod:ai": "node dist/apps/ai/apps/ai/src/main.js",
     "start:prod:all": "concurrently -n gateway,auth,people,ops,ai -c blue,green,yellow,magenta,cyan \"npm:start:prod:gateway\" \"npm:start:prod:auth\" \"npm:start:prod:people\" \"npm:start:prod:ops\" \"npm:start:prod:ai\"",
     "start:all": "npm run build && npm run start:prod:all",
-
     "lint": "eslint \"{apps,libs}/**/*.ts\" --fix",
-    "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\""
+    "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

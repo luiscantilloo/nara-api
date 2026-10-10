@@ -13,31 +13,19 @@ export class LoginController {
   }
 
   @MessagePattern(Patterns.AUTH_LOGOUT)
-  logout() {
-    return { ok: true, status: 200 };
+  logout(@Payload() data: { token?: string | null }) {
+    return this.loginService.logout(data?.token ?? null);
   }
 
-  @MessagePattern(Patterns.AUTH_VERIFY_IDENTITY)
-  verifyIdentity(
-    @Payload()
-    data: { email: string; firstName: string; lastName: string },
-  ) {
-    return this.loginService.verifyIdentity(
-      data.email,
-      data.firstName,
-      data.lastName,
-    );
+  // SPEC-01 FR-01.1: verify-identity y reset-password quedan retirados (el gateway responde 410).
+
+  @MessagePattern(Patterns.AUTH_ASSISTED_RESET)
+  assistedReset(@Payload() data: { token: string | null; accountId: string }) {
+    return this.loginService.assistedReset(data.token, data.accountId);
   }
 
-  @MessagePattern(Patterns.AUTH_RESET_PASSWORD)
-  resetPassword(
-    @Payload()
-    data: { email: string; resetToken: string; password: string },
-  ) {
-    return this.loginService.resetPassword(
-      data.email,
-      data.resetToken,
-      data.password,
-    );
+  @MessagePattern(Patterns.AUTH_CHANGE_PASSWORD)
+  changePassword(@Payload() data: { token: string | null; newPassword: string }) {
+    return this.loginService.changePassword(data.token, data.newPassword);
   }
 }

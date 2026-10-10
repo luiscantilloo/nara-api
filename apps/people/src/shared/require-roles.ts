@@ -13,9 +13,12 @@ export async function requireRoles(
   const id = verifySessionToken(token);
   if (!id)
     return { error: { ok: false, status: 401, error: 'No autenticado.' } };
-  const user = await sessions.loadUser(id);
+  const user = await sessions.loadUser(id, token);
   if (!user)
     return { error: { ok: false, status: 401, error: 'No autenticado.' } };
+  // SPEC-01 FR-01.5: con clave temporal solo se puede crear la clave nueva.
+  if ((user as { mustChangePassword?: boolean }).mustChangePassword)
+    return { error: { ok: false, status: 403, error: 'Debe cambiar su clave.' } };
   if (roles.length && !roles.includes(user.roleId)) {
     return {
       error: { ok: false, status: 403, error: 'Sin permiso para esta acción.' },

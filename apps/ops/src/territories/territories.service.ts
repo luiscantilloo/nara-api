@@ -21,7 +21,11 @@ export class TerritoriesService {
       'territories',
       ['admin', 'experto', 'clinico', 'observador'],
       'territories',
-      { name: 1 },
+      {
+        sort: { name: 1 },
+        // H-006: solo el admin ve los territorios desactivados.
+        filterFor: (roleId) => (roleId === 'admin' ? {} : { active: { $ne: false } }),
+      },
     );
   }
 
@@ -32,36 +36,50 @@ export class TerritoriesService {
     if (!name)
       return { ok: false, status: 400, error: 'El nombre es obligatorio.' };
     const now = new Date();
-    const doc = {
-      name,
-      dep: String(body.dep || ''),
-      level: String(body.level || ''),
-      experts: Number(body.experts) || 0,
-      cap: Number(body.cap) || 0,
-      goal: Number(body.goal) || 0,
-      rural: Number(body.rural) || 0,
-      ruralG: Number(body.ruralG) || 0,
-      sixty: Number(body.sixty) || 0,
-      sixtyG: Number(body.sixtyG) || 0,
-      br: Number(body.br) || 0,
-      brA: Number(body.brA ?? body.br) || 0,
-      brD: Number(body.brD) || 0,
-      brAv: Number(body.brAv ?? body.br) || 0,
-      insts: body.insts ?? 0,
-      content: Array.isArray(body.content) ? body.content : [],
-      places: Array.isArray(body.places) ? body.places : [],
-      isNew: !!body.isNew,
-      pace: Number(body.pace) || 0,
-      updatedAt: now,
+    // A-01 (TRL 2026-10-10): solo se actualizan los campos que llegan; así pausar o cambiar la línea de
+    // crisis no deja en cero el resto. Un territorio nuevo recibe los valores por defecto.
+    const num = (k: string, alt?: string) => Number(body[k] ?? (alt ? body[alt] : undefined)) || 0;
+    const campos: Record<string, () => unknown> = {
+      dep: () => String(body.dep || ''),
+      level: () => String(body.level || ''),
+      experts: () => num('experts'),
+      cap: () => num('cap'),
+      goal: () => num('goal'),
+      rural: () => num('rural'),
+      ruralG: () => num('ruralG'),
+      sixty: () => num('sixty'),
+      sixtyG: () => num('sixtyG'),
+      br: () => num('br'),
+      brA: () => num('brA', 'br'),
+      brD: () => num('brD'),
+      brAv: () => num('brAv', 'br'),
+      insts: () => body.insts ?? 0,
+      content: () => (Array.isArray(body.content) ? body.content : []),
+      places: () => (Array.isArray(body.places) ? body.places : []),
+      isNew: () => !!body.isNew,
+      pace: () => num('pace'),
+      crisisLine: () => String(body.crisisLine || '').slice(0, 60),
     };
+    const doc: Record<string, unknown> = { name, updatedAt: now };
+    const setOnInsert: Record<string, unknown> = { createdAt: now };
+    for (const [k, valor] of Object.entries(campos)) {
+      const llega = k in body || (k === 'brA' && 'br' in body) || (k === 'brAv' && 'br' in body);
+      if (llega) doc[k] = valor();
+      else if (k !== 'crisisLine') setOnInsert[k] = valor();
+    }
+    // H-006: `active` solo cambia si viene explícito; un territorio nuevo nace activo.
+    if (typeof body.active === 'boolean') doc.active = body.active;
+    else setOnInsert.active = true;
     const db = await this.mongo.db();
     await db
       .collection('territories')
       .updateOne(
         { name },
-        { $set: doc, $setOnInsert: { createdAt: now } },
+        { $set: doc, $setOnInsert: setOnInsert },
         { upsert: true },
       );
-    return { ok: true, status: 200, territory: doc };
+    // Devuelve el territorio completo tal como quedó guardado (no solo los campos enviados).
+    const guardado = await db.collection('territories').findOne({ name }, { projection: { _id: 0 } });
+    return { ok: true, status: 200, territory: guardado || doc };
   }
 }

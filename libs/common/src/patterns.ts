@@ -6,9 +6,12 @@ export const Patterns = {
   AUTH_VERIFY: 'auth.verify',
   AUTH_VERIFY_IDENTITY: 'auth.verifyIdentity',
   AUTH_RESET_PASSWORD: 'auth.resetPassword',
+  AUTH_ASSISTED_RESET: 'auth.assistedReset',
+  AUTH_CHANGE_PASSWORD: 'auth.changePassword',
 
   PEOPLE_LIST: 'people.list',
   PEOPLE_UPSERT: 'people.upsert',
+  PEOPLE_ARCHIVE: 'people.archive',
   PATIENTS_LIST: 'patients.list',
   PATIENTS_UPSERT: 'patients.upsert',
   PATIENTS_ME: 'patients.me',
@@ -34,6 +37,7 @@ export const Patterns = {
   ASSETS_TABLET: 'ops.assets.tablet',
   APP_STATE_GET: 'ops.appState.get',
   APP_STATE_PUT: 'ops.appState.put',
+  ALERTS_CREATE: 'ops.alerts.create',
   HEALTH_DB: 'ops.health.db',
 
   TEO_ASK: 'ai.teo.ask',

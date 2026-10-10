@@ -17,12 +17,13 @@ async function agg(
   db: Db,
   col: string,
   pipeline: Record<string, unknown>[],
-) {
-  return db
-    .collection(col)
-    .aggregate(pipeline)
-    .toArray()
-    .catch(() => []);
+): Promise<Record<string, unknown>[]> {
+  try {
+    const rows = await db.collection(col).aggregate(pipeline).toArray();
+    return rows as Record<string, unknown>[];
+  } catch {
+    return [];
+  }
 }
 
 function fmtGroup(
@@ -58,6 +59,8 @@ async function resolveScope(
     .findOne({ id: userId })
     .catch(() => null);
   const accountName = account?.name ? String(account.name) : null;
+  const accountTerr = account?.terr ? String(account.terr) : null;
+  if (roleId === 'clinico') return { ...empty, accountName, terr: accountTerr };
   if (roleId !== 'experto') {
     return { ...empty, accountName };
   }
@@ -77,24 +80,18 @@ async function resolveScope(
   return {
     expertKeys: [...keys],
     expertName: expert.name ? String(expert.name) : accountName,
-    terr: expert.terr ? String(expert.terr) : null,
+    terr: accountTerr || (expert.terr ? String(expert.terr) : null),
     accountName,
   };
 }
 
-function scopePatientFilter(scope: Scope, roleId: string) {
-  if (roleId !== 'experto' || !scope.expertKeys.length) return {};
-  const or: Record<string, unknown>[] = [
-    { expertId: { $in: scope.expertKeys } },
-    { expert: { $in: scope.expertKeys } },
-    { accountId: { $in: scope.expertKeys } },
-  ];
-  if (scope.expertName) {
-    or.push({ expert: scope.expertName });
-    or.push({ expert: { $regex: scope.expertName, $options: 'i' } });
-  }
-  if (scope.terr) or.push({ terr: scope.terr });
-  return { $or: or };
+/** SPEC-02 FR-02.7: experto y clínico solo ven en el contexto de TEO lo de su territorio. */
+// H-005 (reporte TRL 2026-10-10): TEO cuenta lo mismo que /api/people y /api/patients (sin archivados).
+const VIGENTES = { archived: { $ne: true } };
+
+function scopePatientFilter(scope: Scope, roleId: string): Record<string, unknown> {
+  if (roleId !== 'experto' && roleId !== 'clinico') return { ...VIGENTES };
+  return { terr: scope.terr || '__sin_territorio__', ...VIGENTES };
 }
 
 /** Une filtro de alcance con otra condición sin pisar $or. */
@@ -117,6 +114,12 @@ export async function buildStaffContext(
   const nameHint = nameHintFrom(question);
   const scope = await resolveScope(db, roleId, userId);
   const scopeFilter = scopePatientFilter(scope, roleId);
+  const scoped = roleId === 'experto' || roleId === 'clinico'; // con territorio (ver scopePatientFilter)
+  const terrIds = scoped
+    ? (await db.collection('people').find(scopeFilter, { projection: { id: 1 } }).toArray()).map((p) => p.id)
+    : [];
+  const terrOnly = scoped ? scopeFilter : {};
+  const personIn = scoped ? { $or: [{ personId: { $in: terrIds } }, { person: { $in: terrIds } }, { pid: { $in: terrIds } }] } : {};
 
   const parts: string[] = [
     APP_OVERVIEW,
@@ -290,7 +293,7 @@ export async function buildStaffContext(
     ]),
     db
       .collection('experts')
-      .find({})
+      .find(terrOnly)
       .project({
         id: 1,
         name: 1,
@@ -339,7 +342,7 @@ export async function buildStaffContext(
     ]),
     db
       .collection('alerts')
-      .find({})
+      .find(personIn)
       .project({
         id: 1,
         name: 1,
@@ -362,7 +365,9 @@ export async function buildStaffContext(
     db
       .collection('flags')
       .find(
-        roleId === 'experto' && scope.expertKeys.length
+        scoped && roleId === 'clinico'
+          ? personIn
+          : roleId === 'experto' && scope.expertKeys.length
           ? {
               $or: [
                 { expertId: { $in: scope.expertKeys } },
@@ -396,7 +401,9 @@ export async function buildStaffContext(
     db
       .collection('worklist_items')
       .find(
-        roleId === 'experto' && scope.expertKeys.length
+        scoped && roleId === 'clinico'
+          ? personIn
+          : roleId === 'experto' && scope.expertKeys.length
           ? {
               $or: [
                 { expertId: { $in: scope.expertKeys } },
@@ -429,7 +436,7 @@ export async function buildStaffContext(
       .catch(() => []),
     db
       .collection('assets')
-      .find({})
+      .find(terrOnly)
       .project({
         id: 1,
         serial: 1,

@@ -7,17 +7,28 @@ import {
   type SessionUser,
 } from '@nara/common';
 import { DOCUMENT_STORE } from '@nara/database';
+import { sessionIssuedAt } from './session-token';
 
 @Injectable()
 export class SessionService {
   constructor(@Inject(DOCUMENT_STORE) private readonly store: DocumentStore) {}
 
-  async loadUser(accountId: string): Promise<SessionUser | null> {
+  /** T-03: invalida todos los tokens emitidos hasta ahora para esta cuenta. */
+  async revoke(accountId: string) {
+    await this.store.updateOne('accounts', { id: accountId }, { $set: { logoutAt: Date.now() } });
+  }
+
+  async loadUser(accountId: string, token?: string | null): Promise<SessionUser | null> {
     const account = await this.store.findOne('accounts', {
       id: accountId,
       status: 'Activo',
     });
     if (!account) return null;
+    // T-03: un token emitido antes del último cierre de sesión ya no vale.
+    if (token && account.logoutAt) {
+      const iat = sessionIssuedAt(token);
+      if (iat == null || iat * 1000 <= Number(account.logoutAt)) return null;
+    }
     const roleId = String(account.roleId || '');
     const roleDoc =
       (await this.store.findOne('roles', { id: roleId })) ||
@@ -61,6 +72,7 @@ export class SessionService {
       href,
       nk: resolveNotifKey(roleId, String(account.id)),
       patientId,
+      mustChangePassword: account.mustChangePassword === true,
       ...(orgType ? { orgType } : {}),
       ...(modules ? { modules } : {}),
     };

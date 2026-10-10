@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   DEFAULT_PATIENT_MODULES,
   NARA_ROLES,
+  clinicoDelTerritorio,
   ROLE_LABEL_TO_ID,
   normalizeModuleIds,
   type DocumentStore,
@@ -19,19 +20,33 @@ export class AccountsService {
     private readonly sessions: SessionService,
   ) {}
 
-  list(token: string | null) {
-    // Admin + clínico: lastLoginAt para derivar Inactivo (mismo criterio en Personas / Mis pacientes).
-    return listCollection(
-      this.store,
-      this.sessions,
-      token,
+  async list(token: string | null) {
+    // H-002: el admin lista todas las cuentas. El clínico solo necesita lastLoginAt de los pacientes
+    // de su territorio para derivar «Inactivo»: recibe esas cuentas sin correo, teléfono ni nombre.
+    const auth = await requireRoles(this.sessions, token, ['admin', 'clinico']);
+    if ('error' in auth) return auth.error;
+    if (auth.user.roleId === 'admin') {
+      return listCollection(this.store, this.sessions, token, 'accounts', ['admin'], 'accounts', { name: 1 });
+    }
+    const terr = String(auth.user.terr || '');
+    const rows = await this.store.findMany(
       'accounts',
-      ['admin', 'clinico'],
-      'accounts',
-      {
-        name: 1,
-      },
+      { roleId: 'paciente', terr },
+      { limit: 20000 },
     );
+    return {
+      ok: true,
+      status: 200,
+      accounts: rows.map((a) => ({
+        id: a.id,
+        roleId: a.roleId,
+        role: a.role,
+        terr: a.terr,
+        status: a.status,
+        patientId: a.patientId ?? null,
+        lastLoginAt: a.lastLoginAt ?? null,
+      })),
+    };
   }
 
   async me(token: string | null) {
@@ -441,16 +456,8 @@ export class AccountsService {
     // Clínico por territorio (misma lógica de campo).
     let clin = String(personDoc?.clin || existingPatient?.clin || body.clin || '').trim();
     if (!clin && terrName) {
-      const t = terrName.toLowerCase();
-      if (/pereira|dosquebradas|santa rosa|risaralda/.test(t)) {
-        clin = 'Dr. Felipe Ruiz';
-      } else if (
-        /manizales|chinchiná|chinchina|villamaría|villamaria|caldas/.test(t)
-      ) {
-        clin = 'Dra. Carolina Úsuga';
-      } else {
-        clin = 'Dra. Lucía Marín';
-      }
+      // H-009: la cuenta Clínico activa del territorio, no un nombre fijo.
+      clin = (await clinicoDelTerritorio((c, q) => db.collection(c).findOne(q), terrName)) || '';
     }
 
     // Experto del territorio al crear (no esperar a la evaluación).

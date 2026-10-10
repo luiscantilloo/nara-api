@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { normalizeModuleIds } from '@nara/common';
+import { inScope, normalizeModuleIds } from '@nara/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../shared/require-roles';
@@ -148,6 +148,14 @@ export class PatientsUpsertService {
           ? body.place
           : existing?.terr || '',
     ).trim();
+    // SPEC-02 FR-02.2: experto y clínico solo escriben fichas de su territorio.
+    if (
+      auth.user.roleId !== 'admin' &&
+      ((existing && !inScope(auth.user, existing as { terr?: unknown })) ||
+        !inScope(auth.user, { terr }))
+    ) {
+      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
+    }
     let expert = String(
       body.expert != null ? body.expert : existing?.expert || '',
     ).trim();
@@ -221,16 +229,16 @@ export class PatientsUpsertService {
         : Array.isArray(existing?.phq)
           ? existing.phq
           : [],
-      phqDates: Array.isArray(body.phqDates)
+      // H-013 (reporte TRL 2026-10-10): fechas ISO; «Hoy» se convierte en la fecha del día.
+      phqDates: (Array.isArray(body.phqDates)
         ? body.phqDates
         : Array.isArray(existing?.phqDates)
           ? existing.phqDates
-          : ['Hoy'],
+          : [new Date().toISOString().slice(0, 10)]
+      ).map((d: unknown) => (/^\s*hoy\s*$/i.test(String(d)) ? new Date().toISOString().slice(0, 10) : d)),
       expert,
-      clin:
-        body.clin !== undefined
-          ? body.clin || null
-          : existing?.clin ?? byPeople?.clin ?? null,
+      // H-009: si el navegador no trae clínico, se usa el de la ficha de people (resuelto por territorio).
+      clin: body.clin ? String(body.clin) : existing?.clin ?? byPeople?.clin ?? null,
       next: pickStr('next', 'Primera llamada dentro de 7 días'),
       nextShort: pickStr('nextShort', 'Primera llamada'),
       consent:

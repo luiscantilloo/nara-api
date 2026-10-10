@@ -89,10 +89,10 @@ export class TeoAskService {
 
     if (!isLlmConfigured()) {
       return {
-        ok: true,
-        status: 200,
-        fallback: true,
-        text: 'TEO aún no está configurado. Agregue OPENAI_API_KEY (o GEMINI_API_KEY) en nara-api/.env y reinicie el servicio ai.',
+        ok: false,
+        status: 503,
+        error:
+          'TEO aún no está configurado. Agregue OPENAI_API_KEY (o GEMINI_API_KEY) en nara-api/.env y reinicie el servicio ai.',
       };
     }
 
@@ -127,10 +127,9 @@ Responda como TEO: natural, coherente, con los datos del contexto. Sin jerga té
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error en TEO';
       return {
-        ok: true,
-        status: 200,
-        fallback: true,
-        text: message.includes('saturado')
+        ok: false,
+        status: 503,
+        error: message.includes('saturado')
           ? message
           : `No pude consultar al modelo ahora: ${message}. Intente de nuevo en unos segundos.`,
       };

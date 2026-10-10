@@ -4,6 +4,24 @@ import { SessionService } from '@nara/auth-core';
 import { llmComplete, isLlmConfigured } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
+import { crisisCheck, escalarCrisis, esRespuestaCrisis, textoDeCrisis } from './teo-crisis';
+
+/** H-006 (reporte TRL 2026-10-10): nombres de los servicios de la ruta, para que TEO pueda hablar de ella. */
+const SERVICIOS: Record<string, string> = {
+  mood: 'registro diario de ánimo',
+  ia: 'conversación con TEO',
+  cursos: 'curso guiado',
+  videos: 'videos',
+  tech: 'técnicas de respiración y relajación',
+  wa: 'mensajes por WhatsApp',
+  call: 'llamadas de seguimiento',
+  revisit: 'revisita del experto de campo',
+  group: 'sesiones grupales',
+  social: 'apoyo social',
+  clin: 'atención con el psicólogo',
+  bracelet: 'manilla de sueño',
+  hist: 'su historial',
+};
 
 @Injectable()
 export class TeoChatService {
@@ -21,7 +39,6 @@ export class TeoChatService {
     profile?: string;
     age?: number | string;
     messages?: unknown[];
-    system?: string;
   }) {
     const auth = await requireRoles(this.sessions, data.token, ['paciente']);
     if ('error' in auth) return auth.error;
@@ -56,6 +73,8 @@ export class TeoChatService {
       const profile = String(data.profile || patient?.profile || 'P01');
       const age = data.age ?? patient?.age ?? '—';
       const history = String(data.history || '').slice(-2000);
+      const modulos: string[] = Array.isArray(patient?.modulesEnabled) ? patient!.modulesEnabled.map(String) : [];
+      const ruta = modulos.map((m) => SERVICIOS[m]).filter(Boolean);
       const patientSnap = patient
         ? JSON.stringify({
             id: patient.id,
@@ -68,17 +87,41 @@ export class TeoChatService {
           })
         : '(sin ficha en Mongo)';
 
+      // H-001: el servidor escala la crisis con el patientId de la sesión, sin depender del navegador.
+      const escalar = async (termino: string) => {
+        try {
+          const r = await escalarCrisis(db, {
+            patientId: String(patient?.id || patientId),
+            patient,
+            nombre: name,
+            dicho: message,
+            termino,
+          });
+          return { ok: true, status: 200, crisis: true, escalada: true, alertId: r.alertId, text: textoDeCrisis(fname, true) };
+        } catch {
+          return { ok: true, status: 200, crisis: true, escalada: false, text: textoDeCrisis(fname, false) };
+        }
+      };
+      const termino = message ? crisisCheck(message) : null;
+      if (termino) return await escalar(termino);
+
       if (!isLlmConfigured()) {
-        return { ok: true, status: 200, fallback: true, text: '' };
+        return {
+          ok: false,
+          status: 503,
+          error: 'TEO no tiene un proveedor de IA configurado.',
+        };
       }
 
       const system = `${TEO_VOICE}
 
-También: si la persona pregunta algo fuera de NARA, su ruta, su ánimo o su acompañamiento, diga con amabilidad que solo puede ayudar con el programa NARA.
+Temas permitidos: su ruta en NARA y sus servicios, su ánimo, su sueño, las técnicas, los cursos y su acompañamiento. Si pregunta por su ruta, nómbrele los servicios que tiene.
+Solo si pregunta algo que no tiene que ver con NARA, diga con amabilidad que solo puede ayudar con el programa NARA.
 Use la ficha del paciente de la base; no invente datos clínicos.`;
 
       const prompt = `Hablas con ${name}, ${age} años, de ${place}. Perfil ${profile}.
 Ficha (Mongo): ${patientSnap}
+Servicios de su ruta: ${ruta.length ? ruta.join(', ') : '(la ruta todavía no está activa: la activa el clínico después de aprobar la evaluación)'}
 Puedes ofrecer la respiración 4-6, anotar un tema para la sesión o un recurso de Mi ruta.
 Si solo saluda (hola, buenas), responde el saludo y pregunta cómo se siente, sin decir «gracias por contármelo».
 
@@ -93,16 +136,11 @@ TEO:`;
         temperature: 0.55,
         maxTokens: 400,
       });
+      if (esRespuestaCrisis(text)) return { ...(await escalar('clasificador IA')), model, provider };
       return { ok: true, status: 200, text: text.trim(), model, provider };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error en TEO';
-      return {
-        ok: true,
-        status: 200,
-        fallback: true,
-        text: '',
-        error: message,
-      };
+      return { ok: false, status: 503, error: message };
     }
   }
 }

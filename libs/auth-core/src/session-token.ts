@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 
 export const SESSION_COOKIE = 'nara_sid';
-export const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 14;
+// H-016 / T-04: 12 h. Son datos de salud mental; una sesión olvidada en un equipo compartido no debe durar días.
+export const SESSION_MAX_AGE_SEC = 60 * 60 * 12;
 
 function secret() {
   const s = process.env.AUTH_SECRET || process.env.NARA_AUTH_SECRET;
@@ -47,4 +48,11 @@ export function verifySessionToken(
     return null;
   }
   return accountId;
+}
+
+/** Momento de emisión (segundos) de un token válido; null si no es válido. */
+export function sessionIssuedAt(token: string | null | undefined): number | null {
+  if (!verifySessionToken(token)) return null;
+  const exp = Number(String(token).split('.')[1]);
+  return exp - SESSION_MAX_AGE_SEC;
 }
