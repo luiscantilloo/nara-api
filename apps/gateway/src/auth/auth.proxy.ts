@@ -25,8 +25,8 @@ export class AuthProxyController {
   }
 
   @Post('logout')
-  async logout(@Res() res: Response) {
-    await this.proxy.send('auth', Patterns.AUTH_LOGOUT, {});
+  async logout(@Req() req: Request, @Res() res: Response) {
+    await this.proxy.send('auth', Patterns.AUTH_LOGOUT, { token: readToken(req) });
     clearSession(res);
     return res.status(200).json({ ok: true });
   }

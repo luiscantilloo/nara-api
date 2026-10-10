@@ -48,3 +48,10 @@ export function verifySessionToken(
   }
   return accountId;
 }
+
+/** Momento de emisión (segundos) de un token válido; null si no es válido. */
+export function sessionIssuedAt(token: string | null | undefined): number | null {
+  if (!verifySessionToken(token)) return null;
+  const exp = Number(String(token).split('.')[1]);
+  return exp - SESSION_MAX_AGE_SEC;
+}

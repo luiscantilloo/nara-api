@@ -13,8 +13,8 @@ export class LoginController {
   }
 
   @MessagePattern(Patterns.AUTH_LOGOUT)
-  logout() {
-    return { ok: true, status: 200 };
+  logout(@Payload() data: { token?: string | null }) {
+    return this.loginService.logout(data?.token ?? null);
   }
 
   // SPEC-01 FR-01.1: verify-identity y reset-password quedan retirados (el gateway responde 410).

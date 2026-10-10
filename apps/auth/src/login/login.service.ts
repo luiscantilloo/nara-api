@@ -8,6 +8,7 @@ import {
   signSessionToken,
   verifyPassword,
   verifySessionToken,
+  SESSION_MAX_AGE_SEC,
 } from '@nara/auth-core';
 
 const IDENTITY_ERROR =
@@ -116,8 +117,17 @@ export class LoginService {
       { id: account.id },
       { $set: { lastLoginAt: now } },
     );
-    const token = signSessionToken(user.id);
+    // T-03: si cerró sesión en este mismo segundo, el token nuevo se emite un segundo después para no quedar revocado.
+    const extra = account.logoutAt && Math.floor(now / 1000) * 1000 <= Number(account.logoutAt) ? 1 : 0;
+    const token = signSessionToken(user.id, SESSION_MAX_AGE_SEC + extra);
     return { ok: true, status: 200, user, token };
+  }
+
+  /** T-03: cerrar sesión revoca en el servidor los tokens emitidos hasta ahora. */
+  async logout(token: string | null) {
+    const id = verifySessionToken(token);
+    if (id) await this.sessions.revoke(id);
+    return { ok: true, status: 200 };
   }
 
   /** SPEC-01 FR-01.3: el admin genera una clave temporal de 6 dígitos (24 h) para otra cuenta. */

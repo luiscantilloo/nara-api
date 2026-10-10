@@ -11,7 +11,7 @@ export class SessionQueryService {
   async me(token: string | null) {
     const id = verifySessionToken(token);
     if (!id) return { ok: false, status: 401, error: 'No autenticado.' };
-    const user = await this.sessions.loadUser(id);
+    const user = await this.sessions.loadUser(id, token);
     if (!user) return { ok: false, status: 401, error: 'No autenticado.' };
     return { ok: true, status: 200, user };
   }
