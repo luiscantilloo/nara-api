@@ -76,6 +76,13 @@ export class AppStateService {
     );
     if (!Object.keys(slices).length) {
       // H-011: si nada de lo enviado le está permitido a este rol, se rechaza en vez de fingir que se guardó.
+      void this.sessions.logAccess({
+        action: 'http_403',
+        status: 403,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/app-state',
+      });
       return { ok: false, status: 403, error: 'Sin permiso para guardar estos datos.' };
     }
 
@@ -158,6 +165,16 @@ export class AppStateService {
     const ids = ['experto', 'clinico'].includes(auth.user.roleId)
       ? await idsDelTerritorio(db, String(auth.user.terr || ''))
       : null;
-    return guardarAlerta(db, body, auth.user, ids);
+    const result = await guardarAlerta(db, body, auth.user, ids);
+    if (!result.ok && (result.status === 403 || result.status === 404)) {
+      void this.sessions.logAccess({
+        action: `http_${result.status}`,
+        status: result.status,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/alerts',
+      });
+    }
+    return result;
   }
 }
