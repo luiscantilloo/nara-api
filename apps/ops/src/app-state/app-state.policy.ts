@@ -6,7 +6,7 @@ import type { Db } from 'mongodb';
 
 type Slices = Record<string, unknown>;
 type Row = Record<string, unknown>;
-export type PolicyUser = { id: string; roleId: string; terr?: string | null; patientId?: string };
+export type PolicyUser = { id: string; roleId: string; terr?: string | null; patientId?: string; name?: string };
 
 /** Apartados con un registro por paciente (se filtran al territorio para experto y clínico). */
 const POR_PACIENTE = ['alerts', 'crisisLog', 'closedToday', 'notes', 'referrals', 'consents', 'visits', 'revisits', 'falsePositives', 'pendingSync', 'pathAdjust', 'rejected'];
@@ -28,7 +28,8 @@ const pidDe = (r: Row) => String(r?.pid ?? r?.personId ?? r?.patientId ?? '');
 
 /** H-003 (SPEC-003): claves de `notifs` que lee cada rol (su id y la clave de su rol). */
 const NOTIFS_DEL_ROL: Record<string, string[]> = { clinico: ['clin', 'clinico'], experto: ['exp', 'experto'] };
-const clavesNotifs = (user: PolicyUser) => [user.id, ...(NOTIFS_DEL_ROL[user.roleId] || [])];
+// En producción los avisos del experto se guardan con su nombre como clave (pushNotif(s, a.expert, …)).
+const clavesNotifs = (user: PolicyUser) => [user.id, ...(user.name ? [user.name] : []), ...(NOTIFS_DEL_ROL[user.roleId] || [])];
 
 /** H-003: `recursos` sin el avance de otras personas (`people`) ni la asignación (`assigned`) que no le toca. */
 function filtrarRecursos(rec: unknown, deja: (clave: string) => boolean, conAsignados: boolean): unknown {

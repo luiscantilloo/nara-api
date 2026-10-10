@@ -35,6 +35,12 @@ test('H-003 FR-003: el clínico ve recursos de su territorio y solo sus avisos',
   assert.deepEqual(Object.keys(exp.notifs), ['e1']);
 });
 
+test('H-003: el experto también lee los avisos guardados con su nombre (así están en producción)', () => {
+  const s2 = { notifs: { 'Prueba Experto': [{ id: 'n1' }], 'Otro Experto': [{ id: 'n2' }], 'u-exp-1': [{ id: 'n3' }] } };
+  const out = filtrarLectura(s2, { id: 'u-exp-1', roleId: 'experto', terr: 'Prueba', name: 'Prueba Experto' }, new Set()) as any;
+  assert.deepEqual(Object.keys(out.notifs).sort(), ['Prueba Experto', 'u-exp-1']);
+});
+
 test('H-003: al escribir, el clínico no borra recursos ni avisos que no recibió', () => {
   const ids = new Set(['acc-p1', 'acc-p2']);
   const out = restringirEscritura(
