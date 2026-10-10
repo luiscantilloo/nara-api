@@ -17,12 +17,13 @@ async function agg(
   db: Db,
   col: string,
   pipeline: Record<string, unknown>[],
-) {
-  return db
-    .collection(col)
-    .aggregate(pipeline)
-    .toArray()
-    .catch(() => []);
+): Promise<Record<string, unknown>[]> {
+  try {
+    const rows = await db.collection(col).aggregate(pipeline).toArray();
+    return rows as Record<string, unknown>[];
+  } catch {
+    return [];
+  }
 }
 
 function fmtGroup(
