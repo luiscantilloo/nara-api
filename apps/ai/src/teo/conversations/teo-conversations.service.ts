@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import type { Db } from 'mongodb';
-import { inScope, terrFilter } from '@nara/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
 import { requireRoles } from '../../shared/require-roles';
+import {
+  canWriteConversation,
+  resolveConversationsListScope,
+  resolveScopedPatient,
+  type ScopeUser,
+} from './teo-conversations.access';
 
 /** Colección pedida + legado con datos previos. */
 const COL = 'conversacion';
@@ -70,115 +74,6 @@ function publicRow(doc: Record<string, unknown>) {
   };
 }
 
-type ScopeUser = { id: string; roleId: string; terr?: string | null };
-
-/** Resuelve ficha people/patients y comprueba territorio (experto/clínico). */
-async function resolveScopedPatient(
-  db: Db,
-  user: ScopeUser,
-  opts: { patientId?: string; patientName?: string },
-): Promise<
-  | { ok: true; keys: string[] }
-  | { ok: false; status: number; error: string }
-> {
-  const scope = terrFilter(user);
-  if (!scope) {
-    return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
-  }
-  const adminAll = !('terr' in scope);
-  const terrQ = adminAll ? {} : { terr: scope.terr };
-
-  const patientId = String(opts.patientId || '').trim();
-  const patientName = String(opts.patientName || '').trim();
-
-  if (patientId) {
-    const hit =
-      (await db.collection('patients').findOne({
-        $and: [
-          terrQ,
-          {
-            $or: [
-              { id: patientId },
-              { accountId: patientId },
-              { code: patientId },
-            ],
-          },
-        ],
-      })) ||
-      (await db.collection('people').findOne({
-        $and: [
-          terrQ,
-          {
-            $or: [
-              { id: patientId },
-              { accountId: patientId },
-              { code: patientId },
-            ],
-          },
-        ],
-      }));
-    if (!hit) {
-      return {
-        ok: false,
-        status: 404,
-        error: 'Paciente no encontrado en su territorio.',
-      };
-    }
-    if (!adminAll && !inScope(user, hit as { terr?: unknown })) {
-      return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
-    }
-    const keys = [
-      String(hit.id || ''),
-      hit.accountId ? String(hit.accountId) : '',
-      hit.code ? String(hit.code) : '',
-      patientId,
-    ].filter(Boolean);
-    return { ok: true, keys: Array.from(new Set(keys)) };
-  }
-
-  if (patientName) {
-    const rx = {
-      $regex: `^${patientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-      $options: 'i',
-    };
-    const [fromPatients, fromPeople] = await Promise.all([
-      db
-        .collection('patients')
-        .find({ ...terrQ, name: rx })
-        .project({ id: 1, accountId: 1, code: 1, terr: 1 })
-        .limit(20)
-        .toArray(),
-      db
-        .collection('people')
-        .find({ ...terrQ, name: rx })
-        .project({ id: 1, accountId: 1, code: 1, terr: 1 })
-        .limit(20)
-        .toArray(),
-    ]);
-    const keys = new Set<string>();
-    for (const hit of [...fromPatients, ...fromPeople]) {
-      if (!adminAll && !inScope(user, hit as { terr?: unknown })) continue;
-      if (hit.id) keys.add(String(hit.id));
-      if (hit.accountId) keys.add(String(hit.accountId));
-      if (hit.code) keys.add(String(hit.code));
-    }
-    if (!keys.size) {
-      return {
-        ok: false,
-        status: 404,
-        error: 'Paciente no encontrado en su territorio.',
-      };
-    }
-    return { ok: true, keys: Array.from(keys) };
-  }
-
-  return {
-    ok: false,
-    status: 400,
-    error: 'Indique patientId o patientName.',
-  };
-}
-
 @Injectable()
 export class TeoConversationsService {
   constructor(
@@ -191,6 +86,7 @@ export class TeoConversationsService {
     patientId?: string;
     patientName?: string;
   }) {
+    // Observador y otros roles → 403 (no están en la lista).
     const auth = await requireRoles(this.sessions, data.token, [
       'paciente',
       'clinico',
@@ -200,47 +96,29 @@ export class TeoConversationsService {
     if ('error' in auth) return auth.error;
 
     const db = await this.mongo.db();
-    const patientId = String(data.patientId || '').trim();
-    const patientName = String(data.patientName || '').trim();
+    const user: ScopeUser = {
+      id: auth.user.id,
+      roleId: auth.user.roleId,
+      terr: auth.user.terr,
+      patientId: (auth.user as { patientId?: string }).patientId,
+    };
 
-    // Paciente: solo las suyas. Experto/clínico: solo su territorio (6.11 / 5.11 / 6.22).
-    let filter: Record<string, unknown> = {};
-    if (auth.user.roleId === 'paciente') {
-      const pid = String(
-        (auth.user as { patientId?: string }).patientId || auth.user.id,
-      );
-      filter = {
-        $or: [{ accountId: auth.user.id }, { patientId: pid }],
-      };
-    } else {
-      const scoped = await resolveScopedPatient(db, auth.user, {
-        patientId,
-        patientName,
+    const scope = await resolveConversationsListScope(db, user, {
+      patientId: data.patientId,
+      patientName: data.patientName,
+    });
+    if (!scope.ok) {
+      void this.sessions.logAccess({
+        action: `http_${scope.status}`,
+        status: scope.status,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/teo/conversations',
       });
-      if (!scoped.ok) {
-        return { ok: false, status: scoped.status, error: scoped.error };
-      }
-      filter = {
-        $or: [
-          { patientId: { $in: scoped.keys } },
-          { accountId: { $in: scoped.keys } },
-        ],
-      };
-      // Si pidieron por nombre, también acotar patientName (mismo territorio ya validado).
-      if (patientName && !patientId) {
-        filter = {
-          $and: [
-            filter,
-            {
-              patientName: {
-                $regex: `^${patientName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-                $options: 'i',
-              },
-            },
-          ],
-        };
-      }
+      return { ok: false, status: scope.status, error: scope.error };
     }
+
+    const filter = scope.filter ?? {};
 
     const [a, b] = await Promise.all([
       db.collection(COL).find(filter).sort({ startedAt: -1 }).limit(200).toArray(),
@@ -274,6 +152,7 @@ export class TeoConversationsService {
       'paciente',
       'clinico',
       'admin',
+      'experto',
     ]);
     if ('error' in auth) return auth.error;
 
@@ -281,8 +160,12 @@ export class TeoConversationsService {
     // UUID opaco (cliente o servidor); evita ids predecibles tipo tc-<Date.now>.
     let id = String(body.id || '').trim();
     if (!id) id = randomUUID();
-    else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) && !/^tc-[0-9a-z]+$/i.test(id)) {
-      // Acepta UUID o ids legado tc-*; rechaza basura.
+    else if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        id,
+      ) &&
+      !/^tc-[0-9a-z]+$/i.test(id)
+    ) {
       return { ok: false, status: 400, error: 'Id de conversación inválido.' };
     }
 
@@ -292,8 +175,7 @@ export class TeoConversationsService {
     const flujo =
       body.flujoRespiracion === true ||
       messages.some(
-        (m) =>
-          m.role === 'teo' && /respir/i.test(String(m.text || '')),
+        (m) => m.role === 'teo' && /respir/i.test(String(m.text || '')),
       );
     const { resumen, estadoMental } = buildRecord(messages, flujo);
     const startedAt = Number(body.startedAt) || Date.now();
@@ -306,17 +188,36 @@ export class TeoConversationsService {
     let ownerKeys: string[] = [];
 
     const db = await this.mongo.db();
+    const user: ScopeUser = {
+      id: auth.user.id,
+      roleId: auth.user.roleId,
+      terr: auth.user.terr,
+      patientId: (auth.user as { patientId?: string }).patientId,
+    };
+
+    // 6.11: cargar existente pronto para derivar dueño y denegar escritura ajena.
+    const existing =
+      (await db.collection(COL).findOne({ id })) ||
+      (await db.collection(LEGACY).findOne({ id }).catch(() => null));
+    if (existing) {
+      const existingPid = String(existing.patientId || '');
+      const existingAcc = String(existing.accountId || '');
+      if (!patientId && existingPid) patientId = existingPid;
+      if (!accountId && existingAcc) accountId = existingAcc;
+      if (!patientName && existing.patientName) {
+        patientName = String(existing.patientName);
+      }
+    }
 
     if (auth.user.roleId === 'paciente') {
+      // Dueño siempre de la sesión; ignora patientId ajeno del body.
       accountId = auth.user.id;
       const account = await db
         .collection('accounts')
         .findOne({ id: auth.user.id });
       const linked = account?.patientId ? String(account.patientId) : '';
-      const fromSession = String(
-        (auth.user as { patientId?: string }).patientId || '',
-      );
-      patientId = linked || fromSession || patientId || auth.user.id;
+      const fromSession = String(user.patientId || '');
+      patientId = linked || fromSession || auth.user.id;
       if (!patientName) {
         patientName = String(
           account?.name ||
@@ -326,7 +227,7 @@ export class TeoConversationsService {
       }
       ownerKeys = [accountId, patientId].filter(Boolean);
     } else if (auth.user.roleId === 'clinico' || auth.user.roleId === 'experto') {
-      const scoped = await resolveScopedPatient(db, auth.user, {
+      const scoped = await resolveScopedPatient(db, user, {
         patientId: patientId || accountId,
         patientName: patientId || accountId ? undefined : patientName,
       });
@@ -346,44 +247,26 @@ export class TeoConversationsService {
       ownerKeys = [patientId, accountId].filter(Boolean);
     }
 
-    // 6.11: si el id ya existe y no es del dueño / territorio → 403 sin escribir.
-    const existing =
-      (await db.collection(COL).findOne({ id })) ||
-      (await db.collection(LEGACY).findOne({ id }).catch(() => null));
-    if (existing) {
-      const existingPid = String(existing.patientId || '');
-      const existingAcc = String(existing.accountId || '');
-      const owns =
-        auth.user.roleId === 'admin' ||
-        (auth.user.roleId === 'paciente' &&
-          (existingAcc === auth.user.id ||
-            existingPid === patientId ||
-            ownerKeys.includes(existingPid) ||
-            ownerKeys.includes(existingAcc))) ||
-        ((auth.user.roleId === 'clinico' || auth.user.roleId === 'experto') &&
-          (ownerKeys.includes(existingPid) ||
-            ownerKeys.includes(existingAcc) ||
-            (!existingPid && !existingAcc)));
-      if (!owns) {
-        void this.sessions.logAccess({
-          action: 'http_403',
-          status: 403,
-          accountId: auth.user.id,
-          email: auth.user.email,
-          path: '/teo/conversations',
-        });
-        return {
-          ok: false,
-          status: 403,
-          error: 'Sin permiso para esta conversación.',
-        };
-      }
-      // Conservar dueño original si el body no lo trae.
-      if (!patientId && existingPid) patientId = existingPid;
-      if (!accountId && existingAcc) accountId = existingAcc;
-      if (!patientName && existing.patientName) {
-        patientName = String(existing.patientName);
-      }
+    if (
+      existing &&
+      !canWriteConversation(
+        user,
+        existing as { patientId?: unknown; accountId?: unknown },
+        ownerKeys,
+      )
+    ) {
+      void this.sessions.logAccess({
+        action: 'http_403',
+        status: 403,
+        accountId: auth.user.id,
+        email: auth.user.email,
+        path: '/teo/conversations',
+      });
+      return {
+        ok: false,
+        status: 403,
+        error: 'Sin permiso para esta conversación.',
+      };
     }
 
     const doc = {
@@ -402,7 +285,6 @@ export class TeoConversationsService {
       updatedAt: now,
     };
 
-    // Dueño en el filtro al actualizar; upsert solo si no existía (ya validado arriba).
     const writeFilter: Record<string, unknown> = existing
       ? auth.user.roleId === 'paciente'
         ? {
