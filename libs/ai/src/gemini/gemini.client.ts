@@ -1,3 +1,4 @@
+import { llmErrorDetail, logIntegration } from '@nara/common';
 import { modelsToTry, type GeminiCompleteOpts } from './gemini.config';
 import {
   CAPACITY_MESSAGE,
@@ -26,6 +27,7 @@ async function callModel(
   if (opts?.system) {
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
+  const started = Date.now();
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -45,13 +47,41 @@ async function callModel(
     const err = new Error(message) as GeminiError;
     err.status = res.status;
     err.capacity = isCapacityError(res.status, message);
+    logIntegration({
+      service: 'gemini',
+      ok: false,
+      ms: Date.now() - started,
+      status: res.status,
+      model,
+      detail: llmErrorDetail(err),
+      op: 'generateContent',
+    });
     throw err;
   }
 
   const text =
     data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') ||
     '';
-  if (!text.trim()) throw new Error('Gemini no devolvió texto.');
+  if (!text.trim()) {
+    logIntegration({
+      service: 'gemini',
+      ok: false,
+      ms: Date.now() - started,
+      status: res.status,
+      model,
+      detail: 'empty',
+      op: 'generateContent',
+    });
+    throw new Error('Gemini no devolvió texto.');
+  }
+  logIntegration({
+    service: 'gemini',
+    ok: true,
+    ms: Date.now() - started,
+    status: res.status,
+    model,
+    op: 'generateContent',
+  });
   return { text: text.trim(), model };
 }
 

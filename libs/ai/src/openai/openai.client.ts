@@ -1,3 +1,4 @@
+import { llmErrorDetail, logIntegration } from '@nara/common';
 import {
   openaiModelsToTry,
   type OpenAICompleteOpts,
@@ -48,6 +49,7 @@ async function callModel(
     body.max_completion_tokens = max;
   }
 
+  const started = Date.now();
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -67,11 +69,39 @@ async function callModel(
     const err = new Error(message) as OpenAIError;
     err.status = res.status;
     err.capacity = isCapacityError(res.status, message);
+    logIntegration({
+      service: 'openai',
+      ok: false,
+      ms: Date.now() - started,
+      status: res.status,
+      model,
+      detail: llmErrorDetail(err),
+      op: 'chat.completions',
+    });
     throw err;
   }
 
   const text = data.choices?.[0]?.message?.content || '';
-  if (!text.trim()) throw new Error('OpenAI no devolvió texto.');
+  if (!text.trim()) {
+    logIntegration({
+      service: 'openai',
+      ok: false,
+      ms: Date.now() - started,
+      status: res.status,
+      model,
+      detail: 'empty',
+      op: 'chat.completions',
+    });
+    throw new Error('OpenAI no devolvió texto.');
+  }
+  logIntegration({
+    service: 'openai',
+    ok: true,
+    ms: Date.now() - started,
+    status: res.status,
+    model,
+    op: 'chat.completions',
+  });
   return { text: text.trim(), model };
 }
 
