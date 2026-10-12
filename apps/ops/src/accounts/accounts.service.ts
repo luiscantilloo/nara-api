@@ -9,6 +9,7 @@ import {
 } from '@nara/common';
 import { DOCUMENT_STORE, MongoStore } from '@nara/database';
 import { SessionService, hashPassword } from '@nara/auth-core';
+import { passwordPolicyError } from '@nara/common';
 import { requireRoles } from '../shared/require-roles';
 import { listCollection } from '../shared/list-collection';
 
@@ -146,12 +147,18 @@ export class AccountsService {
         error: 'Defina una contraseña para el nuevo usuario.',
       };
     }
-    if (password && password.length < 8) {
-      return {
-        ok: false,
-        status: 400,
-        error: 'La contraseña debe tener al menos 8 caracteres.',
-      };
+    if (password) {
+      const roleIdPreview = ROLE_LABEL_TO_ID[role];
+      const policyErr = passwordPolicyError({
+        password,
+        email: emailRaw,
+        name,
+        role,
+        roleId: roleIdPreview,
+      });
+      if (policyErr) {
+        return { ok: false, status: 400, error: policyErr };
+      }
     }
     if (
       existingByEmail &&

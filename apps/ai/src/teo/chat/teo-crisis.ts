@@ -123,12 +123,16 @@ export async function escalarCrisis(
     detail: alerta.phone ? `Teléfono: ${alerta.phone}` : '',
     status: 'new',
   };
+  const codeLabel = String(
+    (p.patient as { code?: string } | null)?.code || p.patientId || 'sin-código',
+  );
   const aviso = {
     id: `n${at}${Math.random().toString(36).slice(2, 5)}`,
-    text: `Nueva alerta de crisis: ${p.nombre}`,
+    text: `Nueva alerta de crisis: ${codeLabel}`,
     link: '/clinico/crisis',
     at,
     read: false,
+    pid: p.patientId,
   };
   await db.collection('program_settings').updateOne(
     { key: APP_STATE_KEY },

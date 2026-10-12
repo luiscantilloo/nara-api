@@ -223,29 +223,23 @@ export async function resolveConversationsListScope(
   return { ok: false, status: 403, error: 'Sin permiso para esta acción.' };
 }
 
-/** ¿El usuario puede escribir sobre una conversación existente? */
+/**
+ * ¿Puede escribir sobre una conversación existente? (punto 5 · T1)
+ * Solo el dueño (`accountId` de la sesión). Ningún rol (clínico, experto, admin)
+ * puede sobrescribir la conversación de otra cuenta.
+ */
 export function canWriteConversation(
   user: ScopeUser,
   existing: { patientId?: unknown; accountId?: unknown },
-  ownerKeys: string[],
+  _ownerKeys: string[] = [],
 ): boolean {
-  if (user.roleId === 'admin') return true;
-  const existingPid = String(existing.patientId || '');
   const existingAcc = String(existing.accountId || '');
+  if (existingAcc) return existingAcc === user.id;
+  // Legado sin accountId: solo el paciente dueño por patientId.
   if (user.roleId === 'paciente') {
     const pid = String(user.patientId || user.id);
-    return (
-      existingAcc === user.id ||
-      existingPid === pid ||
-      ownerKeys.includes(existingPid) ||
-      ownerKeys.includes(existingAcc)
-    );
-  }
-  if (user.roleId === 'clinico' || user.roleId === 'experto') {
-    if (!existingPid && !existingAcc) return false;
-    return (
-      ownerKeys.includes(existingPid) || ownerKeys.includes(existingAcc)
-    );
+    const existingPid = String(existing.patientId || '');
+    return existingPid === pid || existingPid === user.id;
   }
   return false;
 }

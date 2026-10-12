@@ -52,6 +52,17 @@ const doc = {
   },
   personOv: { 'p-salento': { x: 1 }, 'p-cali': { x: 2 } },
   pins: [{ pid: 'p-cali', name: 'Ana Cali' }],
+  notifs: {
+    clin: [
+      { text: 'Nueva alerta de crisis: Ana Cali', pid: 'p-cali' },
+      { text: 'Nueva alerta de crisis: Gloria Salento', pid: 'p-salento' },
+    ],
+  },
+  notices: {
+    'exp-ajeno': [{ text: 'X atendió la alerta de Ana Cali' }],
+  },
+  reports: [{ title: 'Informe global con Ana Cali' }],
+  weekBase: { foo: 1 },
 };
 
 const terrSalento = new Set(['p-salento', 'acc-salento']);
@@ -63,7 +74,9 @@ test('TEO staff: clínico no ve pids/nombres/tel/correo de otro territorio', () 
     terrIds: terrSalento,
   });
   const text = parts.join('\n');
-  assert.ok(text.includes('p-salento') || text.includes('Alertas'), 'incluye territorio propio');
+  assert.ok(text.includes('p-salento'), 'incluye pid del territorio propio');
+  assert.ok(/Notificaciones \(conteo/.test(text), 'notifs solo conteo para clínico');
+  assert.ok(!/Avisos a equipos/.test(text), 'clínico sin notices de expertos');
   for (const prohibido of [
     'p-cali',
     'Ana Cali',
