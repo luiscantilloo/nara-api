@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { MongoStore } from '@nara/database';
 import { SessionService } from '@nara/auth-core';
-import { llmComplete, isLlmConfigured } from '@nara/ai';
+import { llmComplete, isLlmConfigured, callN8nTeo } from '@nara/ai';
 import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
 import { crisisCheck, escalarCrisis, esRespuestaCrisis, textoDeCrisis } from './teo-crisis';
@@ -115,6 +115,25 @@ export class TeoChatService {
       };
       const termino = message ? crisisCheck(message) : null;
       if (termino) return await escalar(termino);
+
+      // Primero n8n (webhook teopaciente); si falla o no responde, LLM local.
+      const n8nText = await callN8nTeo({
+        message,
+        chatInput: message,
+        history: history || '',
+        profile,
+      });
+      if (n8nText) {
+        if (esRespuestaCrisis(n8nText)) {
+          return { ...(await escalar('clasificador IA')), provider: 'n8n' };
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: n8nText.trim(),
+          provider: 'n8n',
+        };
+      }
 
       if (!isLlmConfigured()) {
         return {
