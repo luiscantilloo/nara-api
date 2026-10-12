@@ -6,7 +6,6 @@ import { requireRoles } from '../../shared/require-roles';
 import {
   canWriteConversation,
   resolveConversationsListScope,
-  resolveScopedPatient,
   type ScopeUser,
 } from './teo-conversations.access';
 
@@ -182,11 +181,6 @@ export class TeoConversationsService {
     const close = body.close === true;
     const now = Date.now();
 
-    let patientId = String(body.patientId || '').trim();
-    let patientName = String(body.patientName || '').trim();
-    let accountId = String(body.accountId || '').trim();
-    let ownerKeys: string[] = [];
-
     const db = await this.mongo.db();
     const user: ScopeUser = {
       id: auth.user.id,
@@ -195,29 +189,72 @@ export class TeoConversationsService {
       patientId: (auth.user as { patientId?: string }).patientId,
     };
 
-    // 6.11: cargar existente pronto para derivar dueño y denegar escritura ajena.
+    // Punto 5 · T1: dueño = accountId de la sesión. Nunca del body.
+    const accountId = auth.user.id;
+    let patientId = '';
+    let patientName = String(
+      (auth.user as { name?: string }).name || '',
+    ).trim();
+
+    // Cargar existente por id (cualquier dueño) para denegar ajenas.
     const existing =
       (await db.collection(COL).findOne({ id })) ||
       (await db.collection(LEGACY).findOne({ id }).catch(() => null));
+
     if (existing) {
-      const existingPid = String(existing.patientId || '');
-      const existingAcc = String(existing.accountId || '');
-      if (!patientId && existingPid) patientId = existingPid;
-      if (!accountId && existingAcc) accountId = existingAcc;
+      if (
+        !canWriteConversation(
+          user,
+          existing as { patientId?: unknown; accountId?: unknown },
+        )
+      ) {
+        void this.sessions.logAccess({
+          action: 'http_403',
+          status: 403,
+          accountId: auth.user.id,
+          email: auth.user.email,
+          path: `/teo/conversations#${id}`,
+        });
+        return {
+          ok: false,
+          status: 403,
+          error: 'Sin permiso para esta conversación.',
+        };
+      }
+      patientId = String(existing.patientId || '');
       if (!patientName && existing.patientName) {
         patientName = String(existing.patientName);
       }
     }
 
     if (auth.user.roleId === 'paciente') {
-      // Dueño siempre de la sesión; ignora patientId ajeno del body.
-      accountId = auth.user.id;
+      // Punto 5 · T5: patientId solo de ficha/sesión; nunca del body.
       const account = await db
         .collection('accounts')
         .findOne({ id: auth.user.id });
       const linked = account?.patientId ? String(account.patientId) : '';
       const fromSession = String(user.patientId || '');
-      patientId = linked || fromSession || auth.user.id;
+      const fromFicha = await db.collection('patients').findOne({
+        accountId: auth.user.id,
+      });
+      patientId =
+        linked ||
+        fromSession ||
+        (fromFicha?.id ? String(fromFicha.id) : '');
+      if (!patientId) {
+        void this.sessions.logAccess({
+          action: 'http_403',
+          status: 403,
+          accountId: auth.user.id,
+          email: auth.user.email,
+          path: `/teo/conversations#sin-ficha`,
+        });
+        return {
+          ok: false,
+          status: 403,
+          error: 'Sin ficha vinculada',
+        };
+      }
       if (!patientName) {
         patientName = String(
           account?.name ||
@@ -225,57 +262,25 @@ export class TeoConversationsService {
             'Paciente',
         );
       }
-      ownerKeys = [accountId, patientId].filter(Boolean);
-    } else if (auth.user.roleId === 'clinico' || auth.user.roleId === 'experto') {
-      const scoped = await resolveScopedPatient(db, user, {
-        patientId: patientId || accountId,
-        patientName: patientId || accountId ? undefined : patientName,
-      });
-      if (!scoped.ok) {
-        void this.sessions.logAccess({
-          action: 'http_' + scoped.status,
-          status: scoped.status,
-          accountId: auth.user.id,
-          email: auth.user.email,
-          path: '/teo/conversations',
-        });
-        return { ok: false, status: scoped.status, error: scoped.error };
+    } else {
+      // Personal: conversaciones propias con TEO (su accountId). No usa patientId del body.
+      patientId = existing ? String(existing.patientId || '') : accountId;
+      if (!patientName) {
+        patientName = String(
+          (auth.user as { name?: string }).name || auth.user.roleId,
+        );
       }
-      ownerKeys = scoped.keys;
-      if (!patientId && scoped.keys[0]) patientId = scoped.keys[0];
-    } else if (auth.user.roleId === 'admin') {
-      ownerKeys = [patientId, accountId].filter(Boolean);
-    }
-
-    if (
-      existing &&
-      !canWriteConversation(
-        user,
-        existing as { patientId?: unknown; accountId?: unknown },
-        ownerKeys,
-      )
-    ) {
-      void this.sessions.logAccess({
-        action: 'http_403',
-        status: 403,
-        accountId: auth.user.id,
-        email: auth.user.email,
-        path: '/teo/conversations',
-      });
-      return {
-        ok: false,
-        status: 403,
-        error: 'Sin permiso para esta conversación.',
-      };
     }
 
     const doc = {
       id,
       patientId,
       patientName,
-      accountId: accountId || undefined,
-      startedAt,
-      fecha: fechaDe(startedAt),
+      accountId,
+      startedAt: existing ? Number(existing.startedAt) || startedAt : startedAt,
+      fecha: fechaDe(
+        existing ? Number(existing.startedAt) || startedAt : startedAt,
+      ),
       messages,
       resumen,
       estadoMental,
@@ -285,22 +290,8 @@ export class TeoConversationsService {
       updatedAt: now,
     };
 
-    const writeFilter: Record<string, unknown> = existing
-      ? auth.user.roleId === 'paciente'
-        ? {
-            id,
-            $or: [{ accountId: auth.user.id }, { patientId }],
-          }
-        : auth.user.roleId === 'admin'
-          ? { id }
-          : {
-              id,
-              $or: [
-                { patientId: { $in: ownerKeys } },
-                { accountId: { $in: ownerKeys } },
-              ],
-            }
-      : { id };
+    // Upsert solo sobre el documento del dueño de la sesión.
+    const writeFilter: Record<string, unknown> = { id, accountId };
 
     const r = await db.collection(COL).updateOne(
       writeFilter,
@@ -313,7 +304,7 @@ export class TeoConversationsService {
         status: 403,
         accountId: auth.user.id,
         email: auth.user.email,
-        path: '/teo/conversations',
+        path: `/teo/conversations#${id}`,
       });
       return {
         ok: false,

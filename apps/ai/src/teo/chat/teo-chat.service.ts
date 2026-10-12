@@ -6,6 +6,7 @@ import { requireRoles } from '../../shared/require-roles';
 import { TEO_VOICE } from '../prompts/teo-voice';
 import { crisisCheck, escalarCrisis, esRespuestaCrisis, textoDeCrisis } from './teo-crisis';
 import { teoRateLimitError, teoRateLimitOk } from '../rate-limit';
+import { redactTextForTeo } from '../context/staff-app-state';
 
 /** H-006 (reporte TRL 2026-10-10): nombres de los servicios de la ruta, para que TEO pueda hablar de ella. */
 const SERVICIOS: Record<string, string> = {
@@ -46,7 +47,8 @@ export class TeoChatService {
     if (!teoRateLimitOk(auth.user.id)) return teoRateLimitError(auth.user.id);
 
     try {
-      const message = String(data.message || '').trim();
+      // Punto 5 · T4/T5: no confiar en patientName/age/place del body; limpiar textos.
+      const message = redactTextForTeo(String(data.message || '').trim());
       if (!message && !Array.isArray(data.messages)) {
         return { ok: false, status: 400, error: 'Escriba un mensaje.' };
       }
@@ -55,35 +57,42 @@ export class TeoChatService {
       const account = await db
         .collection('accounts')
         .findOne({ id: auth.user.id });
-      const patientId = account?.patientId
-        ? String(account.patientId)
-        : auth.user.id;
+      const linked = account?.patientId ? String(account.patientId) : '';
       const patient =
         (await db
           .collection('patients')
           .findOne({ accountId: auth.user.id })) ||
-        (await db.collection('patients').findOne({ id: patientId })) ||
+        (linked
+          ? await db.collection('patients').findOne({ id: linked })
+          : null) ||
         null;
+      if (!patient && !linked) {
+        void this.sessions.logAccess({
+          action: 'http_403',
+          status: 403,
+          accountId: auth.user.id,
+          email: auth.user.email,
+          path: '/teo/chat#sin-ficha',
+        });
+        return { ok: false, status: 403, error: 'Sin ficha vinculada' };
+      }
+      const patientId = String(patient?.id || linked);
 
-      const name = String(
-        data.patientName || patient?.name || auth.user.name || 'Paciente',
-      );
+      const name = String(patient?.name || auth.user.name || 'Paciente');
       const fname = name.split(/\s+/)[0] || 'Paciente';
-      const place = String(data.place || patient?.place || 'Quindío').split(
-        ',',
-      )[0];
-      const profile = String(data.profile || patient?.profile || 'P01');
-      const age = data.age ?? patient?.age ?? '—';
-      const history = String(data.history || '').slice(-2000);
-      const modulos: string[] = Array.isArray(patient?.modulesEnabled) ? patient!.modulesEnabled.map(String) : [];
+      const profile = String(
+        data.profile || patient?.profile || 'P01',
+      ).slice(0, 8);
+      const history = redactTextForTeo(String(data.history || '').slice(-2000));
+      const modulos: string[] = Array.isArray(patient?.modulesEnabled)
+        ? patient!.modulesEnabled.map(String)
+        : [];
       const ruta = modulos.map((m) => SERVICIOS[m]).filter(Boolean);
+      // Prompt sin nombre completo / edad / territorio (solo código de perfil y ruta).
       const patientSnap = patient
         ? JSON.stringify({
-            id: patient.id,
             code: patient.code || '',
-            age: patient.age,
-            place: patient.place,
-            profile: patient.profile,
+            profile: patient.profile || profile,
             status: patient.status,
             modulesEnabled: patient.modulesEnabled,
           })
@@ -93,7 +102,7 @@ export class TeoChatService {
       const escalar = async (termino: string) => {
         try {
           const r = await escalarCrisis(db, {
-            patientId: String(patient?.id || patientId),
+            patientId,
             patient,
             nombre: name,
             dicho: message,
@@ -121,9 +130,8 @@ Temas permitidos: su ruta en NARA y sus servicios, su ánimo, su sueño, las té
 Solo si pregunta algo que no tiene que ver con NARA, diga con amabilidad que solo puede ayudar con el programa NARA.
 Use la ficha del paciente de la base; no invente datos clínicos.`;
 
-      // 6.36: solo el primer nombre en el prompt (no nombre completo).
-      const prompt = `Hablas con ${fname}, ${age} años, de ${place}. Perfil ${profile}.
-Ficha (Mongo): ${patientSnap}
+      const prompt = `Hablas con una persona del programa (perfil ${profile}).
+Ficha (Mongo, sin PII): ${patientSnap}
 Servicios de su ruta: ${ruta.length ? ruta.join(', ') : '(la ruta todavía no está activa: la activa el clínico después de aprobar la evaluación)'}
 Puedes ofrecer la respiración 4-6, anotar un tema para la sesión o un recurso de Mi ruta.
 Si solo saluda (hola, buenas), responde el saludo y pregunta cómo se siente, sin decir «gracias por contármelo».
@@ -131,7 +139,7 @@ Si solo saluda (hola, buenas), responde el saludo y pregunta cómo se siente, si
 Historial reciente:
 ${history || '(inicio de conversación)'}
 
-${fname}: ${message}
+Paciente: ${message}
 TEO:`;
 
       const { text, model, provider } = await llmComplete(prompt, {

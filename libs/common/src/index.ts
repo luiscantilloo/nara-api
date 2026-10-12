@@ -5,3 +5,4 @@ export * from './scope';
 export * from './clinico';
 export * from './validar-persona';
 export * from './integration-log';
+export * from './password-policy';

@@ -167,24 +167,26 @@ test('observador: sin acceso a listado', async () => {
   assert.equal(scope.status, 403);
 });
 
-test('escritura: paciente solo la suya; staff solo keys del territorio', () => {
+test('escritura T1: solo el dueño (accountId); staff/admin no sobrescriben ajenas', () => {
   assert.ok(
-    canWriteConversation(paciente, { patientId: 'sm-1', accountId: 'acc-p1' }, [
-      'acc-p1',
-      'sm-1',
-    ]),
+    canWriteConversation(paciente, { patientId: 'sm-1', accountId: 'acc-p1' }),
   );
   assert.ok(
-    !canWriteConversation(paciente, { patientId: 'sm-9', accountId: 'acc-p9' }, [
-      'acc-p1',
-      'sm-1',
-    ]),
+    !canWriteConversation(paciente, { patientId: 'sm-9', accountId: 'acc-p9' }),
   );
   assert.ok(
-    canWriteConversation(experto, { patientId: 'sm-1' }, ['sm-1', 'acc-p1']),
+    !canWriteConversation(experto, { patientId: 'sm-1', accountId: 'acc-p1' }),
   );
   assert.ok(
-    !canWriteConversation(experto, { patientId: 'sm-9' }, ['sm-1', 'acc-p1']),
+    !canWriteConversation(clinico, { patientId: 'sm-1', accountId: 'acc-p1' }),
   );
-  assert.ok(canWriteConversation(admin, { patientId: 'sm-9' }, []));
+  assert.ok(
+    !canWriteConversation(admin, { patientId: 'sm-1', accountId: 'acc-p1' }),
+  );
+  assert.ok(
+    canWriteConversation(experto, { patientId: 'e1', accountId: 'e1' }),
+  );
+  // Legado sin accountId: solo el paciente dueño.
+  assert.ok(canWriteConversation(paciente, { patientId: 'sm-1' }));
+  assert.ok(!canWriteConversation(experto, { patientId: 'sm-1' }));
 });

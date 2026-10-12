@@ -134,23 +134,36 @@ export class PeopleService {
     const now = new Date();
     const bodyId = String(body.id || '').trim();
     const bodyCode = String(body.code || '').trim();
+    // Punto 7 · T1: misma clientKey en reintentos → no se crea una segunda ficha.
+    const clientKey = String(body.clientKey || body.idempotencyKey || '').trim();
 
     // Paciente: Crisis (ayuda) o Activo (estoy bien) en su propia persona.
     if (auth.user.roleId === 'paciente') {
       const account = await this.store.findOne('accounts', {
         id: auth.user.id,
       });
+      // Punto 5 · T5: nunca usar body.id; solo ficha vinculada / accountId.
       const linked =
         (account?.patientId ? String(account.patientId) : '') ||
         (
           await this.store.findOne('patients', { accountId: auth.user.id })
+        )?.id ||
+        (
+          await this.store.findOne('people', { accountId: auth.user.id })
         )?.id;
-      const ownId = linked ? String(linked) : bodyId;
+      const ownId = linked ? String(linked) : '';
       if (!ownId) {
+        void this.sessions.logAccess({
+          action: 'http_403',
+          status: 403,
+          accountId: auth.user.id,
+          email: auth.user.email,
+          path: '/people#sin-ficha',
+        });
         return {
           ok: false,
-          status: 404,
-          error: 'Sin ficha vinculada.',
+          status: 403,
+          error: 'Sin ficha vinculada',
         };
       }
       const status = String(body.status || body.signal || '').trim();
@@ -230,12 +243,15 @@ export class PeopleService {
     const activa = { archived: { $ne: true } };
     const terrBody = String(body.terr || '').trim();
     let existing =
+      (clientKey
+        ? await this.store.findOne('people', { clientKey })
+        : null) ||
       (bodyId ? await this.store.findOne('people', { id: bodyId }) : null) ||
       (bodyCode
         ? await this.store.findOne('people', { code: bodyCode, ...activa })
         : null) ||
       (name && terrBody ? await this.store.findOne('people', { name, terr: terrBody, ...activa }) : null);
-    const id = String(existing?.id || bodyId || `p${Date.now().toString(36)}`);
+    const id = String(existing?.id || bodyId || clientKey || `p${Date.now().toString(36)}`);
     if (!existing && bodyId) {
       existing = await this.store.findOne('people', { id: bodyId });
     }
@@ -315,6 +331,9 @@ export class PeopleService {
     const doc: Record<string, unknown> = {
       id,
       code,
+      ...(clientKey || existing?.clientKey
+        ? { clientKey: clientKey || String(existing?.clientKey) }
+        : {}),
       name: name || String(existing?.name || ''),
       firstName: pick('firstName'),
       lastName: pick('lastName'),

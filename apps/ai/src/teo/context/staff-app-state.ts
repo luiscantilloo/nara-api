@@ -56,30 +56,52 @@ function pidDe(r: Record<string, unknown>) {
   return String(r?.pid ?? r?.personId ?? r?.patientId ?? r?.id ?? '');
 }
 
-/** Quita PII y deja código en lugar de nombre. */
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+/** 7+ dígitos aunque tengan espacios, guiones, + o paréntesis. */
+const PHONE_RE = /(?:\+?\d[\d\s().-]{5,}\d)/g;
+
+export function redactTextForTeo(input: string): string {
+  return String(input || '')
+    .replace(EMAIL_RE, '[correo]')
+    .replace(PHONE_RE, (match) => {
+      const digits = match.replace(/\D/g, '');
+      return digits.length >= 7 ? '[tel]' : match;
+    });
+}
+
+/** Quita PII (recursivo) y deja código en lugar de nombre. */
 export function redactForTeo(row: unknown): unknown {
-  if (row == null || typeof row !== 'object') return row;
+  if (row == null) return row;
+  if (typeof row === 'string') return redactTextForTeo(row);
+  if (typeof row !== 'object') return row;
   if (Array.isArray(row)) return row.map(redactForTeo);
   const o = { ...(row as Record<string, unknown>) };
-  delete o.phone;
-  delete o.tel;
-  delete o.telefono;
-  delete o.email;
-  delete o.correo;
-  delete o.contact;
-  if (typeof o.detail === 'string') {
-    o.detail = o.detail
-      .replace(/\b3\d{9}\b/g, '[tel]')
-      .replace(
-        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
-        '[correo]',
-      );
+  // Sustituir (no solo borrar) para que el prompt muestre [tel]/[correo] y no queden dígitos.
+  for (const k of ['phone', 'tel', 'telefono'] as const) {
+    if (o[k] != null && o[k] !== '') o[k] = '[tel]';
+  }
+  for (const k of ['email', 'correo'] as const) {
+    if (o[k] != null && o[k] !== '') o[k] = '[correo]';
+  }
+  if (o.contact != null && typeof o.contact === 'string') {
+    o.contact = redactTextForTeo(String(o.contact));
   }
   const code = String(o.code || pidDe(o) || '');
-  if ('name' in o || 'personName' in o) {
+  const rawName = o.name || o.personName;
+  if (rawName) {
+    const label = code || '[persona]';
+    const nameStr = String(rawName);
+    for (const field of ['text', 'what', 'detail', 'msg'] as const) {
+      if (typeof o[field] === 'string' && nameStr) {
+        o[field] = String(o[field]).split(nameStr).join(label);
+      }
+    }
     if (code) o.code = code;
     delete o.name;
     delete o.personName;
+  }
+  for (const [k, v] of Object.entries(o)) {
+    o[k] = redactForTeo(v);
   }
   return o;
 }
@@ -90,7 +112,8 @@ function inTerr(
 ): boolean {
   if (!terrIds) return true;
   const p = pidDe(r);
-  if (!p) return true;
+  // Punto 5 · T3: sin identificador no pasa el filtro de territorio.
+  if (!p && !r.code && !r.accountId) return false;
   return (
     terrIds.has(p) ||
     terrIds.has(String(r.code || '')) ||
@@ -348,74 +371,77 @@ export function summarizeAppStateForTeo(
     }
   }
 
-  // Notificaciones / avisos
+  // Notificaciones (punto 5 · T3): solo conteo — los textos suelen llevar nombres.
   if (st.notifs != null) {
-    if (Array.isArray(st.notifs)) {
-      const sample = filterArr(st.notifs, terrIds, hint, 30);
-      if (sample.length) {
-        parts.push(
-          'Notificaciones: ' + JSON.stringify(sample).slice(0, 3500),
-        );
-      }
-    } else if (typeof st.notifs === 'object') {
-      let map = st.notifs as Record<string, unknown>;
-      if (scoped) {
-        const keep = new Set<string>([
-          ...(opts.expertKeys || []),
-          opts.roleId === 'clinico' ? 'clin' : '',
-          opts.roleId === 'clinico' ? 'clinico' : '',
-          opts.roleId === 'experto' ? 'exp' : '',
-          opts.roleId === 'experto' ? 'experto' : '',
-        ].filter(Boolean));
-        map = Object.fromEntries(
-          Object.entries(map).filter(([k]) => keep.has(k)),
-        );
-      }
-      const keyed = filterKeyed(map, null, 8, 20);
-      if (keyed) {
-        parts.push(
-          'Notificaciones: ' + JSON.stringify(keyed).slice(0, 3500),
-        );
+    let count = 0;
+    if (Array.isArray(st.notifs)) count = st.notifs.length;
+    else if (typeof st.notifs === 'object') {
+      for (const v of Object.values(st.notifs as Record<string, unknown>)) {
+        count += Array.isArray(v) ? v.length : 1;
       }
     }
+    parts.push(`Notificaciones (conteo, sin textos): ${count}.`);
   }
   if (st.notices != null) {
-    parts.push(
-      'Avisos a equipos de campo: ' +
-        JSON.stringify(
-          takeArr(st.notices, 30)?.map(redactForTeo) ??
-            filterKeyed(st.notices, terrIds, 8, 20) ??
-            redactForTeo(st.notices),
-        ).slice(0, 3500),
-    );
+    if (opts.roleId === 'clinico') {
+      // Clínico: no incluir avisos de expertos.
+    } else if (opts.roleId === 'experto') {
+      const keys = new Set(opts.expertKeys || []);
+      if (typeof st.notices === 'object' && !Array.isArray(st.notices) && keys.size) {
+        const map = Object.fromEntries(
+          Object.entries(st.notices as Record<string, unknown>).filter(([k]) =>
+            keys.has(k),
+          ),
+        );
+        const keyed = filterKeyed(map, null, 8, 20);
+        if (keyed) {
+          parts.push(
+            'Avisos propios: ' + JSON.stringify(keyed).slice(0, 3500),
+          );
+        }
+      }
+      // Sin fallback a st.notices completo.
+    } else {
+      parts.push(
+        'Avisos a equipos de campo: ' +
+          JSON.stringify(
+            takeArr(st.notices, 30)?.map(redactForTeo) ??
+              filterKeyed(st.notices, terrIds, 8, 20) ??
+              redactForTeo(st.notices),
+          ).slice(0, 3500),
+      );
+    }
   }
 
-  // Informes
-  if (st.reports != null) {
-    parts.push(
-      'Informes del programa: ' +
-        JSON.stringify(
-          takeArr(st.reports, 25)?.map(redactForTeo) ?? redactForTeo(st.reports),
-        ).slice(0, 4000),
-    );
-  }
-  if (st.customReports != null) {
-    parts.push(
-      'Informes personalizados: ' +
-        JSON.stringify(
-          takeArr(st.customReports, 20)?.map(redactForTeo) ??
-            redactForTeo(st.customReports),
-        ).slice(0, 3500),
-    );
-  }
-  if (st.schedules != null) {
-    parts.push(
-      'Cronogramas / agendas: ' +
-        JSON.stringify(
-          takeArr(st.schedules, 25)?.map(redactForTeo) ??
-            redactForTeo(st.schedules),
-        ).slice(0, 3000),
-    );
+  // Informes / agendas: solo admin (sin filtro de territorio fiable).
+  if (!scoped) {
+    if (st.reports != null) {
+      parts.push(
+        'Informes del programa: ' +
+          JSON.stringify(
+            takeArr(st.reports, 25)?.map(redactForTeo) ??
+              redactForTeo(st.reports),
+          ).slice(0, 4000),
+      );
+    }
+    if (st.customReports != null) {
+      parts.push(
+        'Informes personalizados: ' +
+          JSON.stringify(
+            takeArr(st.customReports, 20)?.map(redactForTeo) ??
+              redactForTeo(st.customReports),
+          ).slice(0, 3500),
+      );
+    }
+    if (st.schedules != null) {
+      parts.push(
+        'Cronogramas / agendas: ' +
+          JSON.stringify(
+            takeArr(st.schedules, 25)?.map(redactForTeo) ??
+              redactForTeo(st.schedules),
+          ).slice(0, 3000),
+      );
+    }
   }
 
   // Recursos / biblioteca — people filtrado por territorio
@@ -466,7 +492,7 @@ export function summarizeAppStateForTeo(
     }
   }
 
-  // Overrides y activos en app_state
+  // Overrides y activos: clínico/experto solo claves filtrables por territorio.
   for (const key of [
     'weekBase',
     'rejected',
@@ -485,6 +511,7 @@ export function summarizeAppStateForTeo(
       key === 'rejected' ||
       key === 'falsePositives' ||
       key === 'assets';
+    if (scoped && !needsTerr) continue; // weekBase/terrOv/expertOv/assetOv sin filtro → omitir
     if (Array.isArray(st[key])) {
       const sample = needsTerr
         ? filterArr(st[key] as unknown[], terrIds, hint, 40)
@@ -510,19 +537,21 @@ export function summarizeAppStateForTeo(
     }
   }
 
-  // Casos demo clínicos (si existen en el programa)
-  for (const key of [
-    'diana',
-    'dianaInbox',
-    'oscarPlan',
-    'rosalbaSummary',
-    'rosalbaWA',
-  ] as const) {
-    if (st[key] != null) {
-      parts.push(
-        `Caso / plan ${key}: ` +
-          JSON.stringify(redactForTeo(st[key])).slice(0, 4000),
-      );
+  // Casos demo: solo admin (contienen nombres).
+  if (isAdmin) {
+    for (const key of [
+      'diana',
+      'dianaInbox',
+      'oscarPlan',
+      'rosalbaSummary',
+      'rosalbaWA',
+    ] as const) {
+      if (st[key] != null) {
+        parts.push(
+          `Caso / plan ${key}: ` +
+            JSON.stringify(redactForTeo(st[key])).slice(0, 4000),
+        );
+      }
     }
   }
 
